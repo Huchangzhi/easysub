@@ -12,9 +12,6 @@ on:
         required: false
         type: string
 
-env:
-  VERSION_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || '' }}
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -38,11 +35,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: extension${{ env.VERSION_TAG != '' && format('-v{0}', env.VERSION_TAG) || '' }}
+          name: extension${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' && format('-v{0}', github.event.inputs.version) || '' }}
           path: dist/
 
   release:
-    if: env.VERSION_TAG != ''
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -50,24 +47,23 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: extension-v${{ env.VERSION_TAG }}
+          name: extension-v${{ github.event.inputs.version }}
           path: dist
 
       - name: Package extension
         run: |
           cd dist
-          zip -r ../easysub-v${{ env.VERSION_TAG }}.zip .
+          zip -r ../easysub-v${{ github.event.inputs.version }}.zip .
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION_TAG }}
-          name: v${{ env.VERSION_TAG }}
+          tag_name: v${{ github.event.inputs.version }}
+          name: v${{ github.event.inputs.version }}
           body: |
-            ## EasySub v${{ env.VERSION_TAG }}
+            ## EasySub v${{ github.event.inputs.version }}
 
-            - 下载 [easysub-v${{ env.VERSION_TAG }}.zip]
-            - Chrome → 扩展程序 → 加载已解压的扩展 → 选择解压后的目录
-          files: easysub-v${{ env.VERSION_TAG }}.zip
+            Chrome → 扩展程序 → 加载已解压的扩展 → 选择解压后的目录
+          files: easysub-v${{ github.event.inputs.version }}.zip
           draft: false
           prerelease: false
