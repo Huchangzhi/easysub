@@ -10,6 +10,11 @@ if [ -f "$TARGET/sherpa-onnx-wasm-main-asr.data" ]; then
 fi
 
 echo "Downloading sherpa-onnx WASM v${VERSION}..."
+TMPDIR=$(mktemp -d)
+curl -sL "$URL" | tar xj -C "$TMPDIR"
 mkdir -p "$TARGET"
-curl -L "$URL" | tar xj -C "$TARGET" --strip-components=1
+find "$TMPDIR" -type f -exec mv {} "$TARGET" \;
+rm -rf "$TMPDIR"
+rm -f "$TARGET/index.html" "$TARGET/app-asr.js"
 echo "Done"
+ls -lh "$TARGET"
