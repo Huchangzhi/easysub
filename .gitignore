@@ -5,3 +5,4 @@ public/wasm/*.wasm
 public/wasm/*.js
 sherpa-onnx-wasm-simd-*
 .model-tmp
+models

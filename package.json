@@ -1,8 +1,9 @@
 {
-  "name": "tmspeech-extension",
+  "name": "easy-subtitle",
   "version": "1.0.0",
-  "description": "Browser speech recognition extension",
+  "description": "免费、安全的基于本地模型的实时字幕浏览器扩展",
   "scripts": {
+    "download-wasm": "bash scripts/download-wasm.sh",
     "build": "webpack --mode production",
     "dev": "webpack --mode development --watch"
   },

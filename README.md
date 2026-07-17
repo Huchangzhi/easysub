@@ -1,38 +1,46 @@
-# TM Speech 浏览器扩展
+# easy字幕
 
-原项目 [TMSpeech](https://github.com/anomalyco/TMSpeech)（.NET 桌面应用）的浏览器扩展移植版。
+免费、安全的基于本地模型的实时字幕浏览器扩展。
 
-## 架构
+## 简介
 
-```
-麦克风/标签页音频 → Web Audio API → ONNX Runtime Web (WebGPU) → 字幕叠加层
-```
+easy字幕 是一款完全离线的浏览器扩展，无需注册、无需联网、无需上传任何数据。通过 WASM 在本地运行语音识别模型，在浏览任意网页时实时生成字幕。
 
-- **WebGPU** 加速 ONNX 模型推理
-- **Whisper** 模型离线语音识别
-- **Chrome Extension** Manifest V3
+- **免费** — 无付费，无订阅
+- **安全** — 所有计算在本地完成，音频数据不上传
+- **离线** — 模型加载后可离线使用
+- **实时** — 低延迟流式识别，说话即现
 
-## 对应关系
+## 使用
 
-| 原项目 | 扩展版 |
-|--------|--------|
-| `TMSpeech.Core/JobManager.cs` | `src/pipeline.ts` |
-| `TMSpeech.Recognizer.SherpaOnnx` | `src/recognizer.ts` |
-| `TMSpeech.AudioSource.Windows` | `src/audio-processor.ts` |
-| `TMSpeech.GUI/Views/MainWindow` | `src/content.ts` (叠加层) |
-| `TMSpeech.GUI/Views/ConfigWindow` | `src/popup.ts` |
+1. 安装扩展后，点击浏览器工具栏的图标打开面板
+2. 点击 **开始** 按钮
+3. 当前标签页播放的音频会自动生成字幕叠加层
+4. 可拖动调整字幕位置，锁定、调节字号
 
 ## 开发
 
 ```bash
 npm install
+# 首次构建需要下载模型
+npm run download-wasm
 npm run build
 ```
 
 然后 Chrome → 扩展程序 → 加载已解压的扩展 → 选择 `dist/` 目录。
 
-## 模型
+## 技术栈
 
-扩展启动时自动从 HuggingFace 下载 Whisper ONNX 模型。
-- whisper-tiny: ~150MB
-- whisper-base: ~290MB
+- **识别引擎**: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/) WASM 离线推理
+- **模型**: Zipformer 中英双语（INT8 量化）
+- **架构**: Chrome Extension Manifest V3
+
+## 鸣谢
+
+- [jxlpzqc/TMSpeech](https://github.com/jxlpzqc/TMSpeech) — 项目灵感来源
+- [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/) — 离线语音识别引擎
+- [Zipformer](https://github.com/k2-fsa/sherpa-onnx/) — 中英双语识别模型
+
+## 许可证
+
+MIT License © 2026 hcz1017

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "TM Speech - 实时语音识别",
+  "name": "easy字幕 - 实时语音识别",
   "version": "1.0.0",
-  "description": "基于 Zipformer WASM 的实时语音识别扩展",
+  "description": "免费、安全的基于本地模型的实时字幕浏览器扩展",
   "permissions": [
     "storage",
     "activeTab",
