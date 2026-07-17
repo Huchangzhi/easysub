@@ -36,6 +36,14 @@ jobs:
           rm -f public/wasm/index.html public/wasm/app-asr.js
           ls -lh public/wasm/
 
+      - name: Set release version
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
+        run: |
+          V=${{ github.event.inputs.version }}
+          sed -i "s/开发版本/v$V/g" src/popup.html
+          sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" package.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" manifest.json
+
       - run: npm run build
 
       - uses: actions/upload-artifact@v4
