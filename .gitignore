@@ -2,7 +2,8 @@ node_modules
 dist
 public/wasm/*.data
 public/wasm/*.wasm
-public/wasm/*.js
+public/wasm/sherpa-onnx-wasm-main-asr.js
+public/wasm/*-wasm-*.js
 sherpa-onnx-wasm-simd-*
 .model-tmp
 models

@@ -21,25 +21,9 @@ jobs:
         run: |
           VERSION="1.13.4"
           mkdir -p public/wasm
-          curl -L -o wasm.tar.bz2 \
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${VERSION}/sherpa-onnx-wasm-simd-v${VERSION}-zh-en-asr-zipformer.tar.bz2"
-          tar xjf wasm.tar.bz2 -C public/wasm --strip-components=1
-          rm wasm.tar.bz2
-
-      - name: Create preload.js
-        run: |
-          cat > public/wasm/preload.js << 'PRELOAD'
-          var Module = {
-            locateFile: function(path) {
-              return chrome.runtime.getURL('wasm/' + path);
-            },
-            onRuntimeInitialized: function() {
-              window.__wasmReady = true;
-              window.__recognizer = createOnlineRecognizer(Module);
-              console.log('[TM WASM] recognizer created');
-            }
-          };
-          PRELOAD
+          curl -L \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${VERSION}/sherpa-onnx-wasm-simd-v${VERSION}-zh-en-asr-zipformer.tar.bz2" \
+            | tar xj -C public/wasm --strip-components=1
 
       - run: npm run build
 
