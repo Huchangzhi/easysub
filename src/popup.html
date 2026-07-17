@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>TM Speech</title>
+<style>
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --bg: rgba(26, 26, 38, 0.88);
+  --surface: rgba(255, 255, 255, 0.05);
+  --surface-hover: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.08);
+  --text: rgba(255, 255, 255, 0.9);
+  --text2: rgba(255, 255, 255, 0.5);
+  --green: #34c759;
+  --orange: #ff9500;
+  --red: #ff3b30;
+  --accent: #5e9eff;
+  --radius: 14px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  width: 340px;
+  font: 400 13px/1.4 system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  color: var(--text);
+  padding: 14px;
+  border-radius: var(--radius);
+  -webkit-font-smoothing: antialiased;
+}
+.container { display: flex; flex-direction: column; gap: 10px; }
+
+/* Stagger entry */
+.container > * {
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 350ms var(--ease-out), transform 350ms var(--ease-out);
+}
+.container.loaded > * {
+  opacity: 1;
+  transform: translateY(0);
+}
+.container.loaded > :nth-child(1) { transition-delay: 0ms; }
+.container.loaded > :nth-child(2) { transition-delay: 40ms; }
+.container.loaded > :nth-child(3) { transition-delay: 80ms; }
+.container.loaded > :nth-child(4) { transition-delay: 120ms; }
+.container.loaded > :nth-child(5) { transition-delay: 160ms; }
+.container.loaded > :nth-child(6) { transition-delay: 200ms; }
+.container.loaded > :nth-child(7) { transition-delay: 240ms; }
+.container.loaded > :nth-child(8) { transition-delay: 280ms; }
+
+/* Header */
+.header { display: flex; align-items: center; gap: 10px; }
+.header .title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; flex: 1; }
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: #555; transition: background 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
+}
+.status-dot.Running { background: var(--green); box-shadow: 0 0 6px rgba(52,199,89,0.6); }
+.status-dot.Stopped { background: var(--red); }
+
+/* Buttons row */
+.controls { display: flex; gap: 6px; }
+.btn {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 8px 0; border: none; border-radius: var(--radius);
+  font: 500 12px/1 system-ui, sans-serif; cursor: pointer;
+  transition: transform 120ms var(--ease-out), opacity 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+  -webkit-font-smoothing: antialiased;
+}
+.btn:active { transform: scale(0.96); }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+.btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+#btnStart { background: var(--green); color: #fff; }
+#btnStop { background: var(--red); color: #fff; }
+@media (hover: hover) and (pointer: fine) {
+  #btnStart:hover { box-shadow: 0 0 12px rgba(52,199,89,0.3); }
+  #btnStop:hover { box-shadow: 0 0 12px rgba(255,59,48,0.3); }
+}
+
+/* Sections */
+.section { display: flex; flex-direction: column; gap: 6px; }
+.section-label { font-size: 11px; font-weight: 500; color: var(--text2); letter-spacing: 0.02em; text-transform: uppercase; }
+
+/* Select */
+.select-wrap { position: relative; }
+.static-mode {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface); color: var(--text);
+  font: 400 12px/1.4 system-ui, sans-serif;
+}
+.select-wrap select {
+  width: 100%; padding: 7px 28px 7px 10px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface); color: var(--text);
+  font: 400 12px/1.4 system-ui, sans-serif; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+  transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out);
+}
+.select-wrap select:hover { border-color: rgba(255,255,255,0.15); background: var(--surface-hover); }
+.select-wrap .arrow {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  width: 14px; height: 14px; color: var(--text2); pointer-events: none;
+}
+
+/* Divider */
+.divider { height: 1px; background: var(--border); margin: 0; }
+
+/* Row */
+.row { display: flex; align-items: center; gap: 8px; }
+.row label { font-size: 13px; cursor: pointer; user-select: none; }
+.row input[type="checkbox"] {
+  width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;
+  transition: transform 120ms var(--ease-out);
+}
+.row input[type="checkbox"]:active { transform: scale(0.9); }
+
+/* Icon button */
+.icon-btn {
+  display: flex; align-items: center; gap: 4px; padding: 4px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); color: var(--text2); font: 400 11px/1 system-ui, sans-serif;
+  cursor: pointer; transition: transform 120ms var(--ease-out), background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+  -webkit-font-smoothing: antialiased; white-space: nowrap;
+}
+.icon-btn:active { transform: scale(0.96); }
+.icon-btn:hover { background: var(--surface-hover); border-color: rgba(255,255,255,0.15); }
+.icon-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+
+/* Slider group */
+.slider-group { display: flex; align-items: center; gap: 6px; flex: 1; }
+.slider-label { font-size: 11px; color: var(--text2); white-space: nowrap; }
+input[type="range"] {
+  flex: 1; height: 3px; -webkit-appearance: none; appearance: none;
+  background: var(--border); border-radius: 2px; outline: none;
+  transition: background 150ms var(--ease-out);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text); border: none; cursor: pointer;
+  transition: transform 120ms var(--ease-out), box-shadow 120ms var(--ease-out);
+}
+input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-shadow: 0 0 8px rgba(255,255,255,0.3); }
+.slider-value { font-size: 12px; color: var(--text); min-width: 24px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Model info */
+.model-info {
+  font-size: 11px; color: var(--text2); letter-spacing: 0.01em;
+  transition: color 200ms var(--ease-out);
+}
+
+/* Text preview */
+.preview {
+  background: var(--surface); border-radius: var(--radius); padding: 10px 12px;
+  min-height: 48px; max-height: 100px; overflow-y: auto;
+  word-break: break-word;
+}
+.preview .sentence {
+  color: var(--accent); font-size: 11px; margin-bottom: 3px; line-height: 1.4;
+  animation: sentenceIn 200ms var(--ease-out) both;
+}
+.preview .current-text { color: var(--text); font-size: 13px; line-height: 1.5; }
+@keyframes sentenceIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Status bar */
+.status-bar {
+  font-size: 11px; color: var(--text2); min-height: 16px;
+  transition: color 200ms var(--ease-out);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .btn, .icon-btn, .container > *, .status-dot,
+  input[type="range"], input[type="range"]::-webkit-slider-thumb,
+  .preview .sentence, .status-bar, .model-info {
+    transition: none !important; animation: none !important;
+  }
+  .btn:active, .icon-btn:active { transform: none; }
+  .container > * { opacity: 1; transform: none; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="header">
+    <span class="status-dot Stopped" id="statusDot"></span>
+    <span class="title">TM Speech</span>
+  </div>
+
+  <div class="controls">
+    <button id="btnStart" class="btn">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.5 4.5a.5.5 0 0 1 .75-.433l12 8a.5.5 0 0 1 0 .866l-12 8A.5.5 0 0 1 6.5 20.5v-16z"/></svg>
+      <span>开始</span>
+    </button>
+    <button id="btnStop" class="btn" disabled>
+      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+      <span>停止</span>
+    </button>
+  </div>
+
+  <div class="section">
+    <span class="section-label">音频来源</span>
+    <div class="select-wrap">
+      <div class="static-mode">从当前标签页识别字幕</div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="section">
+    <div class="row">
+      <input type="checkbox" id="chkOverlay" checked>
+      <label for="chkOverlay">显示字幕</label>
+    </div>
+    <div class="row">
+      <button id="btnLock" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg>
+        <span id="lockLabel">锁定</span>
+      </button>
+      <span class="slider-group">
+        <span class="slider-label">字体</span>
+        <input type="range" id="fontSizeSlider" min="18" max="72" value="36">
+        <span class="slider-value" id="fontSizeLabel">36</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="model-info">Zipformer · 中英双语 · 离线</div>
+
+  <div class="divider"></div>
+
+  <div class="preview" id="textPreview">
+    <div class="current-text">就绪</div>
+  </div>
+
+  <div class="status-bar" id="modelStatus"></div>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>
