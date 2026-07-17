@@ -132,6 +132,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           }).catch(() => {});
         }
         sendToTab(captureTabId, { type: 'OVERLAY_TOGGLE', visible: true });
+        chrome.storage.local.get('tmspeech_prefs').then(r => {
+          const prefs = (r['tmspeech_prefs'] as any) || {};
+          if (prefs.fontSize) sendToTab(captureTabId!, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
+        });
       }
 
       let streamId: string | undefined;

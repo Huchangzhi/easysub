@@ -81,9 +81,9 @@ function create() {
   textEl = document.createElement('div');
   chrome.storage.local.get('tmspeech_prefs').then(r => {
     const prefs = (r['tmspeech_prefs'] as any) || {};
-    const fs = (prefs.fontSize as string) || '36px';
+    const fs = prefs.fontSize || 36;
     if (textEl) {
-      textEl.style.cssText = `color:#fff;font-size:${fs};font-weight:600;line-height:1.4;text-shadow:0 1px 10px rgba(0,0,0,0.8);word-break:break-word;`;
+      textEl.style.cssText = `color:#fff;font-size:${fs}px;font-weight:600;line-height:1.4;text-shadow:0 1px 10px rgba(0,0,0,0.8);word-break:break-word;`;
       if (!REDUCED) textEl.style.transition = 'opacity 120ms cubic-bezier(0.23,1,0.32,1)';
     }
   });
