@@ -5,6 +5,15 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '发布版本号（不加 v，留空仅构建）'
+        required: false
+        type: string
+
+env:
+  VERSION_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || '' }}
 
 jobs:
   build:
@@ -29,5 +38,36 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: extension
+          name: extension${{ env.VERSION_TAG != '' && format('-v{0}', env.VERSION_TAG) || '' }}
           path: dist/
+
+  release:
+    if: env.VERSION_TAG != ''
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-v${{ env.VERSION_TAG }}
+          path: dist
+
+      - name: Package extension
+        run: |
+          cd dist
+          zip -r ../easysub-v${{ env.VERSION_TAG }}.zip .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION_TAG }}
+          name: v${{ env.VERSION_TAG }}
+          body: |
+            ## EasySub v${{ env.VERSION_TAG }}
+
+            - 下载 [easysub-v${{ env.VERSION_TAG }}.zip]
+            - Chrome → 扩展程序 → 加载已解压的扩展 → 选择解压后的目录
+          files: easysub-v${{ env.VERSION_TAG }}.zip
+          draft: false
+          prerelease: false
