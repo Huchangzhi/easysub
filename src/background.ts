@@ -45,6 +45,12 @@ chrome.runtime.onConnect.addListener((port) => {
           const id = captureTabId!;
           sendToTab(id, { type: 'OVERLAY_TOGGLE', visible: true });
           sendToTab(id, { type: 'TEXT_CHANGED', text: '正在等待音频' });
+          chrome.storage.local.get('tmspeech_prefs').then(r => {
+            const prefs = (r['tmspeech_prefs'] as any) || {};
+            if (prefs.fontSize) {
+              sendToTab(id, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
+            }
+          });
           sendToPopup({ type: 'STATUS_CHANGED', status: 'Running' });
         }
       }

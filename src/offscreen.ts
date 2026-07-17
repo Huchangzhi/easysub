@@ -6,7 +6,7 @@ let reconnectTabId: number | null = null;
 let reconnectStreamId: string | null = null;
 
 function log(msg: string) {
-  console.log('[TM Speech Offscreen]', msg);
+  console.log('[EasySub Offscreen]', msg);
   try { port.postMessage({ type: 'FW_POP', payload: { type: 'LOG', message: msg } }); } catch {}
 }
 

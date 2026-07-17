@@ -7,7 +7,7 @@ btn.onclick = async () => {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach(t => t.stop());
-    statusEl.innerHTML = '<span class="ok">✓ 麦克风已授权，可以关闭此页面继续使用 TM Speech</span>';
+    statusEl.innerHTML = '<span class="ok">✓ 麦克风已授权，可以关闭此页面继续使用 EasySub</span>';
     chrome.storage.local.set({ micGranted: true });
   } catch (e) {
     statusEl.innerHTML = `<span class="err">✗ 授权失败: ${e}</span>`;
