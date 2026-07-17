@@ -1,5 +1,5 @@
 {
-  "name": "easy-subtitle",
+  "name": "easysub",
   "version": "1.0.0",
   "description": "免费、安全的基于本地模型的实时字幕浏览器扩展",
   "scripts": {
