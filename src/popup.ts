@@ -174,7 +174,6 @@ chrome.runtime.onMessage.addListener((msg) => {
       textPreview.prepend(el);
       if (textPreview.children.length > 10) textPreview.lastElementChild?.remove();
       transcriptEntries.push(msg.text);
-      saveTranscript();
       renderTranscript();
       break;
     }

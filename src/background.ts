@@ -14,6 +14,14 @@ function sendToTab(tabId: number, msg: any) {
   chrome.tabs.sendMessage(tabId, msg).catch(() => {});
 }
 
+function appendTranscript(text: string) {
+  chrome.storage.local.get('tmspeech_transcript').then(r => {
+    const arr: string[] = (r['tmspeech_transcript'] as string[]) || [];
+    arr.push(text);
+    chrome.storage.local.set({ 'tmspeech_transcript': arr });
+  });
+}
+
 async function ensureOffscreen() {
   const exists = await chrome.offscreen.hasDocument();
   if (exists) return;
@@ -36,6 +44,7 @@ chrome.runtime.onConnect.addListener((port) => {
       sendToPopup(msg.payload);
       if (msg.payload?.type === 'STATUS_CHANGED') pipelineStatus = msg.payload.status;
       if (msg.payload?.type === 'ERROR') cleanupAll();
+      if (msg.payload?.type === 'SENTENCE_DONE') appendTranscript(msg.payload.text);
       if (msg.payload?.type === 'LOG') console.log('[TM BG]', msg.payload.message);
       if (msg.payload?.type === 'RECONNECT') {
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
