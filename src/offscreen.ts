@@ -1,4 +1,5 @@
 import { Pipeline, JobStatus } from './pipeline';
+import { t } from './i18n';
 
 let pipeline: Pipeline | null = null;
 let port: chrome.runtime.Port;
@@ -57,8 +58,9 @@ function setupPort() {
 
       (async () => {
         await waitForWasm();
-        sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: '正在等待音频' });
-        sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: '正在等待音频' });
+        const waitingText = await t('waiting');
+        sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: waitingText });
+        sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: waitingText });
         await pipeline!.start(msg.streamId);
       })().catch((e) => {
         log('Pipeline start 异常: ' + (e.message || e));

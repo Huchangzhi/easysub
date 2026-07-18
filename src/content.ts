@@ -1,3 +1,4 @@
+import { tSync } from './i18n';
 console.log('[TM Content] loaded');
 
 let overlay: HTMLDivElement | null = null;
@@ -79,15 +80,16 @@ function create() {
   });
 
   textEl = document.createElement('div');
-  chrome.storage.local.get('tmspeech_prefs').then(r => {
+  chrome.storage.local.get(['tmspeech_prefs', 'tmspeech_lang']).then(r => {
     const prefs = (r['tmspeech_prefs'] as any) || {};
+    const lang = (r['tmspeech_lang'] as string) || 'zh_CN';
     const fs = prefs.fontSize || 36;
     if (textEl) {
       textEl.style.cssText = `color:#fff;font-size:${fs}px;font-weight:600;line-height:1.4;text-shadow:0 1px 10px rgba(0,0,0,0.8);word-break:break-word;`;
       if (!REDUCED) textEl.style.transition = 'opacity 120ms cubic-bezier(0.23,1,0.32,1)';
+      textEl.textContent = tSync(lang, 'loadingModel');
     }
   });
-  textEl.textContent = '正在加载模型';
   overlay.appendChild(textEl);
 
   addLockButton();

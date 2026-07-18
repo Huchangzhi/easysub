@@ -1,3 +1,4 @@
+import { t } from './i18n';
 const PENDING_KEY = 'pendingInit';
 let captureTabId: number | null = null;
 let pipelineStatus = 'Stopped';
@@ -44,7 +45,7 @@ chrome.runtime.onConnect.addListener((port) => {
           captureTabId = msg.payload.tabId;
           const id = captureTabId!;
           sendToTab(id, { type: 'OVERLAY_TOGGLE', visible: true });
-          sendToTab(id, { type: 'TEXT_CHANGED', text: '正在等待音频' });
+          (async () => { sendToTab(id, { type: 'TEXT_CHANGED', text: await t('waiting') }); })();
           chrome.storage.local.get('tmspeech_prefs').then(r => {
             const prefs = (r['tmspeech_prefs'] as any) || {};
             if (prefs.fontSize) {
