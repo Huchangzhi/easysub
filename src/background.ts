@@ -146,7 +146,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       await ensureOffscreen();
 
-      const initMsg = { type: 'INIT_OFFSCREEN', streamId, tabId: msg.tabId };
+      const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
+      const initMsg = { type: 'INIT_OFFSCREEN', streamId, tabId: msg.tabId, lang };
       if (offscreenPort) {
         offscreenPort.postMessage(initMsg);
       } else {

@@ -13,9 +13,13 @@ const lockLabel = $('lockLabel');
 const fontSizeSlider = $('fontSizeSlider') as HTMLInputElement;
 const fontSizeLabel = $('fontSizeLabel');
 const btnLang = $('btnLang') as HTMLButtonElement;
+const btnCopy = $('btnCopy') as HTMLButtonElement;
+const btnClear = $('btnClear') as HTMLButtonElement;
+const transcriptBox = $('transcriptBox');
 
 let locked = false;
 let currentLang = 'zh_CN';
+let transcriptEntries: string[] = [];
 const PREFS_KEY = 'tmspeech_prefs';
 
 requestAnimationFrame(() => {
@@ -33,9 +37,15 @@ async function applyLang() {
   $('showSubtitles').textContent = tr('showSubtitles');
   $('fontLabel').textContent = tr('font');
   $('modelInfo').textContent = tr('modelInfo');
-  $('readyText').textContent = tr('ready');
+  const rt = document.getElementById('readyText');
+  if (rt) rt.textContent = tr('ready');
+  $('transcriptLabel').textContent = tr('transcript');
+  $('copyLabel').textContent = tr('copy');
+  $('clearLabel').textContent = tr('clearTranscript');
+  $('disclaimer').textContent = tr('disclaimer');
   btnLang.textContent = tr('langSwitch');
   updateLockUI();
+  renderTranscript();
 }
 
 async function loadPrefs() {
@@ -107,6 +117,32 @@ btnLang.onclick = async () => {
   await applyLang();
 };
 
+function renderTranscript() {
+  if (transcriptEntries.length === 0) {
+    transcriptBox.innerHTML = `<div class="transcript-empty" id="transcriptEmpty">${tSync(currentLang, 'transcriptEmpty')}</div>`;
+    return;
+  }
+  transcriptBox.innerHTML = transcriptEntries.map(t =>
+    `<div class="transcript-entry">${escapeHtml(t)}</div>`
+  ).join('');
+  transcriptBox.scrollTop = transcriptBox.scrollHeight;
+}
+
+btnCopy.onclick = async () => {
+  const text = transcriptEntries.join('\n');
+  if (!text) return;
+  await navigator.clipboard.writeText(text);
+  const label = $('copyLabel');
+  const orig = label.textContent!;
+  label.textContent = tSync(currentLang, 'copied');
+  setTimeout(() => { label.textContent = orig; }, 1200);
+};
+
+btnClear.onclick = () => {
+  transcriptEntries = [];
+  renderTranscript();
+};
+
 fontSizeSlider.oninput = () => {
   fontSizeLabel.textContent = fontSizeSlider.value;
   const size = parseInt(fontSizeSlider.value);
@@ -125,6 +161,8 @@ chrome.runtime.onMessage.addListener((msg) => {
       el.textContent = msg.text;
       textPreview.prepend(el);
       if (textPreview.children.length > 10) textPreview.lastElementChild?.remove();
+      transcriptEntries.push(msg.text);
+      renderTranscript();
       break;
     }
     case 'STATUS_CHANGED':

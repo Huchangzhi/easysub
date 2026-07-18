@@ -52,6 +52,11 @@ body {
 .container.loaded > :nth-child(6) { transition-delay: 200ms; }
 .container.loaded > :nth-child(7) { transition-delay: 240ms; }
 .container.loaded > :nth-child(8) { transition-delay: 280ms; }
+.container.loaded > :nth-child(9) { transition-delay: 320ms; }
+.container.loaded > :nth-child(10) { transition-delay: 360ms; }
+.container.loaded > :nth-child(11) { transition-delay: 400ms; }
+.container.loaded > :nth-child(12) { transition-delay: 440ms; }
+.container.loaded > :nth-child(13) { transition-delay: 480ms; }
 
 /* Header */
 .header { display: flex; align-items: center; gap: 10px; }
@@ -164,6 +169,18 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
   animation: sentenceIn 200ms var(--ease-out) both;
 }
 .preview .current-text { color: var(--text); font-size: 13px; line-height: 1.5; }
+
+/* Transcript */
+.transcript-box {
+  background: var(--surface); border-radius: var(--radius); padding: 8px 10px;
+  min-height: 48px; max-height: 140px; overflow-y: auto;
+  word-break: break-word; font-size: 12px; line-height: 1.5;
+  user-select: text;
+}
+.transcript-entry { padding: 6px 0; color: var(--text); }
+.transcript-entry + .transcript-entry { border-top: 1px solid var(--border); }
+.transcript-empty { color: var(--text2); font-style: italic; font-size: 11px; }
+.disclaimer { font-size: 10px; color: var(--text2); text-align: center; line-height: 1.3; }
 @keyframes sentenceIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
@@ -179,7 +196,8 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 @media (prefers-reduced-motion: reduce) {
   .btn, .icon-btn, .container > *, .status-dot,
   input[type="range"], input[type="range"]::-webkit-slider-thumb,
-  .preview .sentence, .status-bar, .model-info {
+  .preview .sentence, .status-bar, .model-info,
+  .transcript-box, .disclaimer {
     transition: none !important; animation: none !important;
   }
   .btn:active, .icon-btn:active { transform: none; }
@@ -249,6 +267,27 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
   </div>
 
   <div class="status-bar" id="modelStatus"></div>
+
+  <div class="divider"></div>
+
+  <div class="section" id="transcriptSection">
+    <span class="section-label" id="transcriptLabel">字幕记录</span>
+    <div class="transcript-box" id="transcriptBox">
+      <div class="transcript-empty" id="transcriptEmpty">暂无字幕</div>
+    </div>
+    <div class="row">
+      <button id="btnCopy" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="12" height="16" rx="2"/><path d="M6 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1"/></svg>
+        <span id="copyLabel">复制</span>
+      </button>
+      <button id="btnClear" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        <span id="clearLabel">清空</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="disclaimer" id="disclaimer">字幕由模型识别，不保证准确</div>
 </div>
 <script src="popup.js"></script>
 </body>

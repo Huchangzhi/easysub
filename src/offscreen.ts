@@ -1,10 +1,11 @@
 import { Pipeline, JobStatus } from './pipeline';
-import { t } from './i18n';
+import { tSync } from './i18n';
 
 let pipeline: Pipeline | null = null;
 let port: chrome.runtime.Port;
 let reconnectTabId: number | null = null;
 let reconnectStreamId: string | null = null;
+let currentLang = 'zh_CN';
 
 function log(msg: string) {
   console.log('[易字幕 Offscreen]', msg);
@@ -33,6 +34,7 @@ function setupPort() {
       log('收到 INIT_OFFSCREEN');
       reconnectTabId = msg.tabId || null;
       reconnectStreamId = msg.streamId || null;
+      if (msg.lang) currentLang = msg.lang;
 
       pipeline?.stop();
       pipeline = null;
@@ -58,7 +60,7 @@ function setupPort() {
 
       (async () => {
         await waitForWasm();
-        const waitingText = await t('waiting');
+        const waitingText = tSync(currentLang, 'waiting');
         sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: waitingText });
         sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: waitingText });
         await pipeline!.start(msg.streamId);

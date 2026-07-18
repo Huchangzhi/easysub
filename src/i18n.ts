@@ -23,6 +23,12 @@ const strings: Record<string, Record<string, string>> = {
     statusRunning: 'Running',
     statusStopped: 'Stopped',
     langSwitch: 'EN',
+    transcript: '字幕记录',
+    transcriptEmpty: '暂无字幕',
+    copy: '复制',
+    copied: '已复制',
+    clearTranscript: '清空',
+    disclaimer: '字幕由模型识别，不保证准确',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -48,6 +54,12 @@ const strings: Record<string, Record<string, string>> = {
     statusRunning: 'Running',
     statusStopped: 'Stopped',
     langSwitch: '中',
+    transcript: 'Transcript',
+    transcriptEmpty: 'No subtitles yet',
+    copy: 'Copy',
+    copied: 'Copied',
+    clearTranscript: 'Clear',
+    disclaimer: 'Subtitles are AI-generated, accuracy not guaranteed',
   },
 };
 
