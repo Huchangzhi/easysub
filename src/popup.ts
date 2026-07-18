@@ -21,6 +21,7 @@ let locked = false;
 let currentLang = 'zh_CN';
 let transcriptEntries: string[] = [];
 const PREFS_KEY = 'tmspeech_prefs';
+const TRANSCRIPT_KEY = 'tmspeech_transcript';
 
 requestAnimationFrame(() => {
   document.querySelector('.container')?.classList.add('loaded');
@@ -117,6 +118,16 @@ btnLang.onclick = async () => {
   await applyLang();
 };
 
+async function loadTranscript() {
+  const r = await chrome.storage.local.get(TRANSCRIPT_KEY);
+  transcriptEntries = (r[TRANSCRIPT_KEY] as string[]) || [];
+  renderTranscript();
+}
+
+function saveTranscript() {
+  chrome.storage.local.set({ [TRANSCRIPT_KEY]: transcriptEntries });
+}
+
 function renderTranscript() {
   if (transcriptEntries.length === 0) {
     transcriptBox.innerHTML = `<div class="transcript-empty" id="transcriptEmpty">${tSync(currentLang, 'transcriptEmpty')}</div>`;
@@ -140,6 +151,7 @@ btnCopy.onclick = async () => {
 
 btnClear.onclick = () => {
   transcriptEntries = [];
+  chrome.storage.local.remove(TRANSCRIPT_KEY);
   renderTranscript();
 };
 
@@ -162,6 +174,7 @@ chrome.runtime.onMessage.addListener((msg) => {
       textPreview.prepend(el);
       if (textPreview.children.length > 10) textPreview.lastElementChild?.remove();
       transcriptEntries.push(msg.text);
+      saveTranscript();
       renderTranscript();
       break;
     }
@@ -188,6 +201,7 @@ function escapeHtml(s: string): string {
 }
 
 loadPrefs();
+loadTranscript();
 applyLang();
 chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((resp: any) => {
   if (resp?.status) setStatus(resp.status);
