@@ -129,6 +129,7 @@ body {
 .icon-btn:active { transform: scale(0.96); }
 .icon-btn:hover { background: var(--surface-hover); border-color: rgba(255,255,255,0.15); }
 .icon-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+.lang-switch { font-weight: 600; min-width: 32px; justify-content: center; }
 
 /* Slider group */
 .slider-group { display: flex; align-items: center; gap: 6px; flex: 1; }
@@ -192,27 +193,28 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
   <div class="header">
     <img src="logo.jpg" style="width:22px;height:22px;border-radius:6px;flex-shrink:0;">
     <span class="status-dot Stopped" id="statusDot"></span>
-    <span class="title">易字幕 开发版本</span>
+    <span class="title" id="appTitle">易字幕 开发版本</span>
     <a href="https://github.com/huchangzhi/easysub" target="_blank" style="display:flex;color:var(--text2);text-decoration:none;" title="GitHub">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
     </a>
+    <button id="btnLang" class="icon-btn lang-switch">EN</button>
   </div>
 
   <div class="controls">
     <button id="btnStart" class="btn">
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.5 4.5a.5.5 0 0 1 .75-.433l12 8a.5.5 0 0 1 0 .866l-12 8A.5.5 0 0 1 6.5 20.5v-16z"/></svg>
-      <span>开始</span>
+      <span id="btnStartText">开始</span>
     </button>
     <button id="btnStop" class="btn" disabled>
       <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
-      <span>停止</span>
+      <span id="btnStopText">停止</span>
     </button>
   </div>
 
   <div class="section">
-    <span class="section-label">音频来源</span>
+    <span class="section-label" id="audioSource">音频来源</span>
     <div class="select-wrap">
-      <div class="static-mode">从当前标签页识别字幕</div>
+      <div class="static-mode" id="sourceDesc">从当前标签页识别字幕</div>
     </div>
   </div>
 
@@ -221,7 +223,7 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
   <div class="section">
     <div class="row">
       <input type="checkbox" id="chkOverlay" checked>
-      <label for="chkOverlay">显示字幕</label>
+      <label for="chkOverlay" id="showSubtitles">显示字幕</label>
     </div>
     <div class="row">
       <button id="btnLock" class="icon-btn">
@@ -229,7 +231,7 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
         <span id="lockLabel">锁定</span>
       </button>
       <span class="slider-group">
-        <span class="slider-label">字体</span>
+        <span class="slider-label" id="fontLabel">字体</span>
         <input type="range" id="fontSizeSlider" min="18" max="72" value="36">
         <span class="slider-value" id="fontSizeLabel">36</span>
       </span>
@@ -238,12 +240,12 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 
   <div class="divider"></div>
 
-  <div class="model-info">Zipformer · 中英双语 · 离线</div>
+  <div class="model-info" id="modelInfo">Zipformer · 中英双语 · 离线</div>
 
   <div class="divider"></div>
 
   <div class="preview" id="textPreview">
-    <div class="current-text">就绪</div>
+    <div class="current-text" id="readyText">就绪</div>
   </div>
 
   <div class="status-bar" id="modelStatus"></div>

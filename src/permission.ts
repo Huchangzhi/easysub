@@ -1,16 +1,39 @@
+import { getLang, setLang, tSync } from './i18n';
+
 const statusEl = document.getElementById('status')!;
 const btn = document.getElementById('btnGrant') as HTMLButtonElement;
+const btnLang = document.getElementById('btnLang') as HTMLButtonElement;
+
+let currentLang = 'zh_CN';
+
+async function applyLang() {
+  currentLang = await getLang();
+  const tr = (key: string) => tSync(currentLang, key);
+  document.getElementById('permissionTitle')!.textContent = tr('permissionTitle');
+  document.getElementById('permissionDesc')!.textContent = tr('permissionDesc');
+  document.getElementById('permissionBtnText')!.textContent = tr('permissionGrant');
+  btnLang.textContent = tr('langSwitch');
+}
+
+btnLang.onclick = async () => {
+  const newLang = currentLang === 'zh_CN' ? 'en' : 'zh_CN';
+  await setLang(newLang);
+  await applyLang();
+};
 
 btn.onclick = async () => {
   btn.disabled = true;
-  statusEl.textContent = '请求中...';
+  const tr = (key: string) => tSync(currentLang, key);
+  statusEl.textContent = tr('permissionRequesting');
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach(t => t.stop());
-    statusEl.innerHTML = '<span class="ok">✓ 麦克风已授权，可以关闭此页面继续使用 易字幕</span>';
+    statusEl.innerHTML = '<span class="ok">' + tr('permissionGranted') + '</span>';
     chrome.storage.local.set({ micGranted: true });
   } catch (e) {
-    statusEl.innerHTML = `<span class="err">✗ 授权失败: ${e}</span>`;
+    statusEl.innerHTML = `<span class="err">✗ ${tr('permissionFailed')}: ${e}</span>`;
     btn.disabled = false;
   }
 };
+
+applyLang();

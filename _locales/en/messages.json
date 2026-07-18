@@ -1,0 +1,4 @@
+{
+  "extensionName": { "message": "EasySub - Real-time Speech Subtitles" },
+  "extensionDescription": { "message": "A free, privacy-first offline browser extension that generates real-time subtitles using on-device WASM speech recognition." }
+}

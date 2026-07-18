@@ -40,7 +40,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
         run: |
           V=${{ github.event.inputs.version }}
-          sed -i "s/开发版本/v$V/g" src/popup.html
+          sed -i "s/开发版本/v$V/g" src/popup.html src/i18n.ts
           sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" package.json
           sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" manifest.json
 

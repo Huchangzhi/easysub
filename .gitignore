@@ -1,5 +1,6 @@
 node_modules
 dist
+release-assets
 public/wasm/*.data
 public/wasm/*.wasm
 public/wasm/*.js

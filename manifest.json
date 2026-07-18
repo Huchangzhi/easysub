@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "易字幕 - 实时语音识别",
+  "name": "__MSG_extensionName__",
   "version": "1.0.0",
-  "description": "免费、安全的基于本地模型的实时字幕浏览器扩展",
+  "default_locale": "zh_CN",
+  "description": "__MSG_extensionDescription__",
   "permissions": [
     "storage",
     "activeTab",

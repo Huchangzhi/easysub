@@ -1,3 +1,5 @@
+import { getLang, setLang, tSync } from './i18n';
+
 const $ = (id: string) => document.getElementById(id)!;
 
 const statusDot = $('statusDot');
@@ -10,13 +12,31 @@ const btnLock = $('btnLock') as HTMLButtonElement;
 const lockLabel = $('lockLabel');
 const fontSizeSlider = $('fontSizeSlider') as HTMLInputElement;
 const fontSizeLabel = $('fontSizeLabel');
+const btnLang = $('btnLang') as HTMLButtonElement;
 
 let locked = false;
+let currentLang = 'zh_CN';
 const PREFS_KEY = 'tmspeech_prefs';
 
 requestAnimationFrame(() => {
   document.querySelector('.container')?.classList.add('loaded');
 });
+
+async function applyLang() {
+  currentLang = await getLang();
+  const tr = (key: string) => tSync(currentLang, key);
+  $('appTitle').textContent = tr('appTitle');
+  $('btnStartText').textContent = tr('btnStart');
+  $('btnStopText').textContent = tr('btnStop');
+  $('audioSource').textContent = tr('audioSource');
+  $('sourceDesc').textContent = tr('sourceDesc');
+  $('showSubtitles').textContent = tr('showSubtitles');
+  $('fontLabel').textContent = tr('font');
+  $('modelInfo').textContent = tr('modelInfo');
+  $('readyText').textContent = tr('ready');
+  btnLang.textContent = tr('langSwitch');
+  updateLockUI();
+}
 
 async function loadPrefs() {
   const r = await chrome.storage.local.get(PREFS_KEY);
@@ -45,11 +65,12 @@ function log(msg: string) {
 }
 
 function updateLockUI() {
+  const tr = (key: string) => tSync(currentLang, key);
   const isLocked = locked;
-  lockLabel.textContent = isLocked ? '解锁' : '锁定';
+  lockLabel.textContent = isLocked ? tr('unlock') : tr('lock');
   btnLock.innerHTML = isLocked
-    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8.5 11V7a3.5 3.5 0 0 1 6.5-2"/></svg><span id="lockLabel">解锁</span>'
-    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg><span id="lockLabel">锁定</span>';
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8.5 11V7a3.5 3.5 0 0 1 6.5-2"/></svg><span id="lockLabel">' + tr('unlock') + '</span>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg><span id="lockLabel">' + tr('lock') + '</span>';
 }
 
 btnStart.onclick = async () => {
@@ -78,6 +99,12 @@ btnLock.onclick = () => {
   locked = !locked;
   chrome.runtime.sendMessage({ type: 'LOCK_TOGGLE', locked }).catch(() => {});
   updateLockUI();
+};
+
+btnLang.onclick = async () => {
+  const newLang = currentLang === 'zh_CN' ? 'en' : 'zh_CN';
+  await setLang(newLang);
+  await applyLang();
 };
 
 fontSizeSlider.oninput = () => {
@@ -123,6 +150,7 @@ function escapeHtml(s: string): string {
 }
 
 loadPrefs();
+applyLang();
 chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((resp: any) => {
   if (resp?.status) setStatus(resp.status);
   if (resp?.locked !== undefined) { locked = resp.locked; updateLockUI(); }

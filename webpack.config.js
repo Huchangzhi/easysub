@@ -9,6 +9,7 @@ module.exports = {
     popup: './src/popup.ts',
     offscreen: './src/offscreen.ts',
     permission: './src/permission.ts',
+    i18n: './src/i18n.ts',
   },
   module: {
     rules: [
@@ -26,6 +27,7 @@ module.exports = {
       patterns: [
         { from: 'public', to: '.' },
         { from: 'manifest.json', to: '.' },
+        { from: '_locales', to: '_locales' },
       ],
     }),
     new HtmlPlugin({

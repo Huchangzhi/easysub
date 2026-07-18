@@ -26,7 +26,19 @@ body {
   width: 100%;
   text-align: center;
   box-shadow: 0 16px 64px rgba(0,0,0,0.5);
+  position: relative;
 }
+.btn-lang {
+  position: absolute; top: 12px; right: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 10px; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+  background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5);
+  font: 600 11px/1 system-ui, sans-serif; cursor: pointer;
+  transition: transform 120ms cubic-bezier(0.23,1,0.32,1), background 150ms;
+  -webkit-font-smoothing: antialiased;
+}
+.btn-lang:active { transform: scale(0.96); }
+.btn-lang:hover { background: rgba(255,255,255,0.1); }
 .icon {
   width: 48px; height: 48px; margin: 0 auto 20px;
   background: rgba(94,158,255,0.15);
@@ -68,14 +80,16 @@ p { font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 24px; line-hei
       <path d="M8 23h8"/>
     </svg>
   </div>
-  <h1>需要麦克风权限</h1>
-  <p id="status">易字幕 需要麦克风访问权限才能进行语音识别</p>
+  <button id="btnLang" class="btn-lang">EN</button>
+  <h1 id="permissionTitle">需要麦克风权限</h1>
+  <p id="permissionDesc">易字幕 需要麦克风访问权限才能进行语音识别</p>
+  <div id="status"></div>
   <button id="btnGrant" class="btn">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
       <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
     </svg>
-    授权麦克风
+    <span id="permissionBtnText">授权麦克风</span>
   </button>
 </div>
 <script src="permission.js"></script>
