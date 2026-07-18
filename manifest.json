@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "easy字幕 - 实时语音识别",
+  "name": "易字幕 - 实时语音识别",
   "version": "1.0.0",
   "description": "免费、安全的基于本地模型的实时字幕浏览器扩展",
   "permissions": [
@@ -20,7 +20,7 @@
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "TM Speech"
+    "default_title": "易字幕"
   },
   "background": {
     "service_worker": "background.js",
