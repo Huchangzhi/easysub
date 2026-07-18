@@ -25,7 +25,7 @@ const strings: Record<string, Record<string, string>> = {
     langSwitch: 'EN',
   },
   en: {
-    appTitle: 'EasySub Dev Build',
+    appTitle: 'EasySub 开发版本',
     btnStart: 'Start',
     btnStop: 'Stop',
     audioSource: 'Audio Source',
