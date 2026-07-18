@@ -1,4 +1,4 @@
-# 易字幕 / easyhub
+# 易字幕 / EasySub
 
 <p>
   <img src="logo.jpg" width="64" height="64" style="border-radius:12px;">
