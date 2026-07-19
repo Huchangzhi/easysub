@@ -217,6 +217,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     cleanupAll();
   }
 
+  if (msg.type === 'RESET_OVERLAY_POSITION') {
+    if (captureTabId) sendToTab(captureTabId, { type: 'RESET_OVERLAY_POSITION' });
+  }
+
   if (msg.type === 'FORWARD_TO_CONTENT') {
     if (captureTabId) sendToTab(captureTabId, msg.payload);
   }

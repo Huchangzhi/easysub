@@ -123,8 +123,8 @@ function addLockButton() {
   lockBtn = document.createElement('button');
   lockBtn.innerHTML = LOCK_SVG;
   lockBtn.style.cssText = [
-    'position:absolute;top:8px;right:8px;width:28px;height:28px;',
-    'border-radius:8px;border:none;background:rgba(255,255,255,0.06);',
+    'position:absolute;top:6px;right:6px;width:36px;height:36px;',
+    'border-radius:10px;border:none;background:rgba(255,255,255,0.06);',
     'color:rgba(255,255,255,0.5);cursor:pointer;',
     'display:flex;align-items:center;justify-content:center;padding:0;',
     'z-index:2147483647;opacity:0;',
@@ -330,6 +330,23 @@ chrome.runtime.onMessage.addListener((msg) => {
       break;
     case 'SET_FONT_SIZE':
       if (textEl) { textEl.style.fontSize = msg.fontSize + 'px'; scheduleSave(); }
+      break;
+    case 'RESET_OVERLAY_POSITION':
+      chrome.storage.local.remove(STORAGE_KEY);
+      if (overlay) {
+        overlay.style.left = '50%';
+        overlay.style.top = '50%';
+        overlay.style.transform = 'translate(-50%, -50%)';
+        overlay.style.width = '';
+        overlay.style.height = '';
+        overlay.style.willChange = '';
+        if (!REDUCED) {
+          overlay.style.transition = 'left 400ms cubic-bezier(0.23,1,0.32,1), top 400ms cubic-bezier(0.23,1,0.32,1), transform 400ms cubic-bezier(0.23,1,0.32,1)';
+          requestAnimationFrame(() => {
+            if (overlay) { overlay.style.transition = ''; }
+          });
+        }
+      }
       break;
   }
 });

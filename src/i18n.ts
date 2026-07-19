@@ -29,6 +29,7 @@ const strings: Record<string, Record<string, string>> = {
     copied: '已复制',
     clearTranscript: '清空',
     disclaimer: '字幕由模型识别，不保证准确',
+    resetPosition: '重置位置',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -60,6 +61,7 @@ const strings: Record<string, Record<string, string>> = {
     copied: 'Copied',
     clearTranscript: 'Clear',
     disclaimer: 'Subtitles are AI-generated, accuracy not guaranteed',
+    resetPosition: 'Reset Position',
   },
 };
 

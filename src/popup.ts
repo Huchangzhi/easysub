@@ -13,6 +13,7 @@ const lockLabel = $('lockLabel');
 const fontSizeSlider = $('fontSizeSlider') as HTMLInputElement;
 const fontSizeLabel = $('fontSizeLabel');
 const btnLang = $('btnLang') as HTMLButtonElement;
+const btnResetOverlay = $('btnResetOverlay') as HTMLButtonElement;
 const btnCopy = $('btnCopy') as HTMLButtonElement;
 const btnClear = $('btnClear') as HTMLButtonElement;
 const transcriptBox = $('transcriptBox');
@@ -44,6 +45,7 @@ async function applyLang() {
   $('copyLabel').textContent = tr('copy');
   $('clearLabel').textContent = tr('clearTranscript');
   $('disclaimer').textContent = tr('disclaimer');
+  $('resetOverlayLabel').textContent = tr('resetPosition');
   btnLang.textContent = tr('langSwitch');
   updateLockUI();
   renderTranscript();
@@ -104,6 +106,10 @@ btnStop.onclick = () => {
 
 chkOverlay.onchange = () => {
   chrome.runtime.sendMessage({ type: 'OVERLAY_TOGGLE', visible: chkOverlay.checked }).catch(() => {});
+};
+
+btnResetOverlay.onclick = () => {
+  chrome.runtime.sendMessage({ type: 'RESET_OVERLAY_POSITION' }).catch(() => {});
 };
 
 btnLock.onclick = () => {
