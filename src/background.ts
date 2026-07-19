@@ -230,3 +230,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.payload?.type === 'STATUS_CHANGED') pipelineStatus = msg.payload.status;
   }
 });
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (tabId !== captureTabId || changeInfo.status !== 'complete' || pipelineStatus !== 'Running') return;
+  setTimeout(() => {
+    chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] }).then(() => {
+      sendToTab(tabId, { type: 'OVERLAY_TOGGLE', visible: true });
+      chrome.storage.local.get('tmspeech_prefs').then(r => {
+        const prefs = (r['tmspeech_prefs'] as any) || {};
+        if (prefs.fontSize) sendToTab(tabId, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
+      });
+      if (offscreenPort) offscreenPort.postMessage({ type: 'RESEND_CURRENT_TEXT' });
+    }).catch(() => {});
+  }, 300);
+});

@@ -6,6 +6,7 @@ let port: chrome.runtime.Port;
 let reconnectTabId: number | null = null;
 let reconnectStreamId: string | null = null;
 let currentLang = 'zh_CN';
+let lastText = '';
 
 function log(msg: string) {
   console.log('[易字幕 Offscreen]', msg);
@@ -41,6 +42,7 @@ function setupPort() {
 
       pipeline = new Pipeline({
         onTextChanged: (text) => {
+          lastText = text;
           sendSafe('FW_CT', { type: 'TEXT_CHANGED', text });
           sendSafe('FW_POP', { type: 'TEXT_CHANGED', text });
         },
@@ -68,6 +70,13 @@ function setupPort() {
         log('Pipeline start 异常: ' + (e.message || e));
         sendSafe('FW_POP', { type: 'ERROR', message: `Pipeline启动失败: ${e.message || e}` });
       });
+    }
+
+    if (msg.type === 'RESEND_CURRENT_TEXT') {
+      if (lastText) {
+        sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: lastText });
+        sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: lastText });
+      }
     }
 
     if (msg.type === 'STOP_OFFSCREEN') {
