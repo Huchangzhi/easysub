@@ -10,6 +10,10 @@ let currentLang = 'zh_CN';
 let lastText = '';
 let prevSentence = '';
 let usePunct = true;
+let punctPending = false;
+let lastPunctText = '';
+
+declare function createOnlineRecognizer(Module: any, config: any): any;
 
 function log(msg: string) {
   console.log('[易字幕 Offscreen]', msg);
@@ -34,6 +38,7 @@ function setupPort() {
   });
 
   port.onMessage.addListener((msg) => {
+    try {
     if (msg.type === 'INIT_OFFSCREEN') {
       log('收到 INIT_OFFSCREEN');
       reconnectTabId = msg.tabId || null;
@@ -47,13 +52,31 @@ function setupPort() {
       pipeline = new Pipeline({
         onTextChanged: (text) => {
           lastText = text;
-          sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: text });
-          sendSafe('FW_CT', { type: 'TEXT_CHANGED', text });
-          sendSafe('FW_POP', { type: 'TEXT_CHANGED', text });
+          if (usePunct) {
+            const display = lastPunctText || text;
+            sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: display })
+            sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: display })
+            sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: display })
+            if (!punctPending) {
+              punctPending = true;
+              setTimeout(() => {
+                punctPending = false;
+                lastPunctText = addPunctuation(lastText);
+                sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: lastPunctText })
+                sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: lastPunctText })
+                sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: lastPunctText })
+              }, 0);
+            }
+          } else {
+            sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: text })
+            sendSafe('FW_CT', { type: 'TEXT_CHANGED', text })
+            sendSafe('FW_POP', { type: 'TEXT_CHANGED', text })
+          }
         },
         onSentenceDone: (text) => {
           prevSentence = usePunct ? addPunctuation(text) : text;
           lastText = '';
+          lastPunctText = '';
           sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: '' });
           sendSafe('FW_CT', { type: 'SENTENCE_DONE', text: prevSentence, isFinal: true });
           sendSafe('FW_POP', { type: 'SENTENCE_DONE', text: prevSentence });
@@ -69,10 +92,18 @@ function setupPort() {
       });
 
       (async () => {
+        try {
         await waitForWasm();
-        // pitfall: 标点模型按需加载，关掉功能就不创建 OfflinePunctuation
-        // 注意 window.OfflinePunctuation 需要 punctuation.js 末尾显式赋值
-        // （class 声明不会自动挂到 window 上）
+        if (!(window as any).__recognizer) {
+          const r1 = msg.endpointRule1 ?? 0.8;
+          const r2 = msg.endpointRule2 ?? 0.6;
+          const r3 = msg.endpointRule3 ?? 15;
+          (window as any).__recognizer = createOnlineRecognizer((window as any).Module, {
+            rule1MinTrailingSilence: r1,
+            rule2MinTrailingSilence: r2,
+            rule3MinUtteranceLength: Math.round(r3),
+          });
+        }
         if (usePunct && !(window as any).__punctuator) {
           try {
             (window as any).__punctuator = new (window as any).OfflinePunctuation({
@@ -86,6 +117,7 @@ function setupPort() {
         sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: waitingText });
         sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: waitingText });
         await pipeline!.start(msg.streamId);
+        } catch (e: any) { log('INIT_OFFSCREEN async 异常: ' + (e?.stack || e)); throw e; }
       })().catch((e) => {
         log('Pipeline start 异常: ' + (e.message || e));
         sendSafe('FW_POP', { type: 'ERROR', message: `Pipeline启动失败: ${e.message || e}` });
@@ -105,6 +137,10 @@ function setupPort() {
       }
     }
 
+    if (msg.type === 'SET_ENDPOINT') {
+      log(`端点阈值 saved: ${msg.rule1}/${msg.rule2}/${msg.rule3} (重启生效)`);
+    }
+
     if (msg.type === 'STOP_OFFSCREEN') {
       log('收到 STOP_OFFSCREEN');
       reconnectTabId = null;
@@ -112,6 +148,7 @@ function setupPort() {
       pipeline?.stop();
       pipeline = null;
     }
+    } catch (e) { log('消息处理异常: ' + ((e as any)?.stack || e)); }
   });
 }
 

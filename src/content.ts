@@ -6,6 +6,9 @@ let prevEl: HTMLDivElement | null = null;
 let textEl: HTMLDivElement | null = null;
 let lockBtn: HTMLButtonElement | null = null;
 let _locked = false;
+let _showPrev = true;
+let _prevOpacity = 0.35;
+let _pendingText = '';
 let animFrame: number | null = null;
 let dragState: {
   baseLeft: number; baseTop: number;
@@ -80,6 +83,12 @@ function create() {
     if (r.tmspeech_locked) { _locked = true; applyLock(); }
   });
 
+  chrome.storage.local.get('tmspeech_prefs').then(r => {
+    const prefs = (r['tmspeech_prefs'] as any) || {};
+    _showPrev = prefs.showPrev !== false;
+    _prevOpacity = (prefs.prevOpacity ?? 35) / 100;
+  });
+
   prevEl = document.createElement('div');
   textEl = document.createElement('div');
   chrome.storage.local.get(['tmspeech_prefs', 'tmspeech_lang']).then(r => {
@@ -90,12 +99,14 @@ function create() {
     if (prevEl) {
       prevEl.style.cssText = baseStyle;
       prevEl.style.display = 'none';
+      prevEl.style.opacity = String(_prevOpacity);
       if (!REDUCED) prevEl.style.transition = 'opacity 120ms cubic-bezier(0.23,1,0.32,1)';
     }
     if (textEl) {
       textEl.style.cssText = baseStyle;
       if (!REDUCED) textEl.style.transition = 'opacity 120ms cubic-bezier(0.23,1,0.32,1)';
       textEl.textContent = tSync(lang, 'loadingModel');
+      if (_pendingText) { textEl.textContent = _pendingText; _pendingText = ''; }
     }
   });
   overlay.appendChild(prevEl);
@@ -305,7 +316,7 @@ function applyLock() {
 }
 
 function setText(text: string) {
-  if (!textEl) return;
+  if (!textEl) { _pendingText = text; return; }
   if (!REDUCED) {
     textEl.style.opacity = '0';
     setTimeout(() => {
@@ -319,19 +330,20 @@ function setText(text: string) {
 function setOverlayText(prev: string, current: string) {
   const pe = prevEl, te = textEl;
   if (!pe || !te) return;
+  const showPrev = _showPrev && prev;
   if (!REDUCED) {
     pe.style.opacity = '0';
     te.style.opacity = '0';
     setTimeout(() => {
       pe.textContent = prev;
-      pe.style.display = prev ? '' : 'none';
+      pe.style.display = showPrev ? '' : 'none';
       te.textContent = current;
-      pe.style.opacity = '1';
+      pe.style.opacity = String(_prevOpacity);
       te.style.opacity = '1';
     }, 60);
   } else {
     pe.textContent = prev;
-    pe.style.display = prev ? '' : 'none';
+    pe.style.display = showPrev ? '' : 'none';
     te.textContent = current;
   }
 }
@@ -363,6 +375,11 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'SET_FONT_SIZE':
       if (prevEl) { prevEl.style.fontSize = msg.fontSize + 'px'; }
       if (textEl) { textEl.style.fontSize = msg.fontSize + 'px'; scheduleSave(); }
+      break;
+    case 'SET_PREV_OPTS':
+      _showPrev = msg.showPrev;
+      _prevOpacity = (msg.prevOpacity ?? 35) / 100;
+      if (prevEl) prevEl.style.opacity = String(_prevOpacity);
       break;
     case 'RESET_OVERLAY_POSITION':
       chrome.storage.local.remove(STORAGE_KEY);

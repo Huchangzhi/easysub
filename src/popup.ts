@@ -7,6 +7,15 @@ const btnStart = $('btnStart') as HTMLButtonElement;
 const btnStop = $('btnStop') as HTMLButtonElement;
 const chkOverlay = $('chkOverlay') as HTMLInputElement;
 const chkPunct = $('chkPunct') as HTMLInputElement;
+const chkShowPrev = $('chkShowPrev') as HTMLInputElement;
+const prevOpacitySlider = $('prevOpacitySlider') as HTMLInputElement;
+const prevOpacityLabel = $('prevOpacityLabel');
+const endpointRule1 = $('endpointRule1') as HTMLInputElement;
+const endpointRule2 = $('endpointRule2') as HTMLInputElement;
+const endpointRule3 = $('endpointRule3') as HTMLInputElement;
+const endpointVal1 = $('endpointVal1');
+const endpointVal2 = $('endpointVal2');
+const endpointVal3 = $('endpointVal3');
 const textPreview = $('textPreview');
 const modelStatus = $('modelStatus');
 const btnLock = $('btnLock') as HTMLButtonElement;
@@ -48,6 +57,16 @@ async function applyLang() {
   $('disclaimer').textContent = tr('disclaimer');
   $('resetOverlayLabel').textContent = tr('resetPosition');
   $('showPunct').textContent = tr('showPunct');
+  $('punctNote').textContent = tr('punctNote');
+  $('showPrev').textContent = tr('showPrev');
+  $('prevOpacity').textContent = tr('prevOpacity');
+  $('endpointLabel1').textContent = tr('endpointRule1');
+  $('endpointLabel2').textContent = tr('endpointRule2');
+  $('endpointLabel3').textContent = tr('endpointRule3');
+  $('secDisplay').textContent = tr('secDisplay');
+  $('secPrev').textContent = tr('secPrev');
+  $('secPunct').textContent = tr('secPunct');
+  $('resetEndpointLabel').textContent = tr('resetEndpoint');
   btnLang.textContent = tr('langSwitch');
   updateLockUI();
   renderTranscript();
@@ -60,6 +79,19 @@ async function loadPrefs() {
     fontSizeSlider.value = String(prefs.fontSize);
     fontSizeLabel.textContent = String(prefs.fontSize);
   }
+  chkShowPrev.checked = prefs.showPrev !== false;
+  const po = prefs.prevOpacity ?? 35;
+  prevOpacitySlider.value = String(po);
+  prevOpacityLabel.textContent = String(po);
+  const r1 = prefs.endpointRule1 ?? 0.8;
+  const r2 = prefs.endpointRule2 ?? 0.6;
+  const r3 = prefs.endpointRule3 ?? 15;
+  endpointRule1.value = String(Math.round(r1 * 10));
+  endpointVal1.textContent = r1.toFixed(1) + 's';
+  endpointRule2.value = String(Math.round(r2 * 10));
+  endpointVal2.textContent = r2.toFixed(1) + 's';
+  endpointRule3.value = String(r3);
+  endpointVal3.textContent = r3 + 's';
 }
 
 function savePrefs(partial: Record<string, any>) {
@@ -167,6 +199,41 @@ btnClear.onclick = () => {
   transcriptEntries = [];
   chrome.storage.local.remove(TRANSCRIPT_KEY);
   renderTranscript();
+};
+
+function sendEndpoint() {
+  const r1 = parseInt(endpointRule1.value) / 10;
+  const r2 = parseInt(endpointRule2.value) / 10;
+  const r3 = parseInt(endpointRule3.value);
+  savePrefs({ endpointRule1: r1, endpointRule2: r2, endpointRule3: r3 });
+  chrome.runtime.sendMessage({ type: 'SET_ENDPOINT', rule1: r1, rule2: r2, rule3: r3 }).catch(() => {});
+}
+
+endpointRule1.oninput = () => { endpointVal1.textContent = (parseInt(endpointRule1.value) / 10).toFixed(1) + 's'; sendEndpoint(); };
+endpointRule2.oninput = () => { endpointVal2.textContent = (parseInt(endpointRule2.value) / 10).toFixed(1) + 's'; sendEndpoint(); };
+endpointRule3.oninput = () => { endpointVal3.textContent = endpointRule3.value + 's'; sendEndpoint(); };
+
+const ENDPOINT_DEFAULTS = { endpointRule1: 0.8, endpointRule2: 0.6, endpointRule3: 15 };
+$('btnResetEndpoint').onclick = () => {
+  endpointRule1.value = String(Math.round(ENDPOINT_DEFAULTS.endpointRule1 * 10));
+  endpointVal1.textContent = ENDPOINT_DEFAULTS.endpointRule1.toFixed(1) + 's';
+  endpointRule2.value = String(Math.round(ENDPOINT_DEFAULTS.endpointRule2 * 10));
+  endpointVal2.textContent = ENDPOINT_DEFAULTS.endpointRule2.toFixed(1) + 's';
+  endpointRule3.value = String(ENDPOINT_DEFAULTS.endpointRule3);
+  endpointVal3.textContent = ENDPOINT_DEFAULTS.endpointRule3 + 's';
+  sendEndpoint();
+};
+
+chkShowPrev.onchange = () => {
+  savePrefs({ showPrev: chkShowPrev.checked });
+  chrome.runtime.sendMessage({ type: 'SET_PREV_OPTS', showPrev: chkShowPrev.checked, prevOpacity: parseInt(prevOpacitySlider.value) }).catch(() => {});
+};
+
+prevOpacitySlider.oninput = () => {
+  const v = parseInt(prevOpacitySlider.value);
+  prevOpacityLabel.textContent = String(v);
+  savePrefs({ prevOpacity: v });
+  chrome.runtime.sendMessage({ type: 'SET_PREV_OPTS', showPrev: chkShowPrev.checked, prevOpacity: v }).catch(() => {});
 };
 
 fontSizeSlider.oninput = () => {

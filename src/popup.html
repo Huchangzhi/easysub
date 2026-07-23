@@ -57,6 +57,10 @@ body {
 .container.loaded > :nth-child(11) { transition-delay: 400ms; }
 .container.loaded > :nth-child(12) { transition-delay: 440ms; }
 .container.loaded > :nth-child(13) { transition-delay: 480ms; }
+.container.loaded > :nth-child(14) { transition-delay: 520ms; }
+.container.loaded > :nth-child(15) { transition-delay: 560ms; }
+.container.loaded > :nth-child(16) { transition-delay: 600ms; }
+.container.loaded > :nth-child(17) { transition-delay: 640ms; }
 
 /* Header */
 .header { display: flex; align-items: center; gap: 10px; }
@@ -117,6 +121,7 @@ body {
 /* Row */
 .row { display: flex; align-items: center; gap: 8px; }
 .row label { font-size: 13px; cursor: pointer; user-select: none; }
+.row .note { font-size: 10px; color: var(--text2); margin-left: 4px; opacity: 0.7; }
 .row input[type="checkbox"] {
   width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;
   transition: transform 120ms var(--ease-out);
@@ -239,26 +244,74 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
   <div class="divider"></div>
 
   <div class="section">
+    <span class="section-label" id="secDisplay">显示</span>
     <div class="row">
       <input type="checkbox" id="chkOverlay" checked>
       <label for="chkOverlay" id="showSubtitles">显示字幕</label>
-      <button id="btnResetOverlay" class="icon-btn" style="margin-left:auto;">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.5 15.5a9 9 0 1 0 2.12-9.36L1 10"/></svg>
-        <span id="resetOverlayLabel">重置</span>
-      </button>
-    </div>
-    <div class="row">
-      <input type="checkbox" id="chkPunct" checked>
-      <label for="chkPunct" id="showPunct">标点添加</label>
       <button id="btnLock" class="icon-btn" style="margin-left:auto;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg>
         <span id="lockLabel">锁定</span>
       </button>
+      <button id="btnResetOverlay" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.5 15.5a9 9 0 1 0 2.12-9.36L1 10"/></svg>
+        <span id="resetOverlayLabel">重置位置</span>
+      </button>
+    </div>
+    <div class="row">
+      <span class="slider-label" id="fontLabel">字体大小</span>
+      <input type="range" id="fontSizeSlider" min="18" max="72" value="36">
+      <span class="slider-value" id="fontSizeLabel">36</span>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="section">
+    <span class="section-label" id="secPrev">上一句</span>
+    <div class="row">
+      <input type="checkbox" id="chkShowPrev" checked>
+      <label for="chkShowPrev" id="showPrev">显示上一句</label>
       <span class="slider-group">
-        <span class="slider-label" id="fontLabel">字体</span>
-        <input type="range" id="fontSizeSlider" min="18" max="72" value="36">
-        <span class="slider-value" id="fontSizeLabel">36</span>
+        <span class="slider-label" id="prevOpacity">透明度</span>
+        <input type="range" id="prevOpacitySlider" min="5" max="100" value="35">
+        <span class="slider-value" id="prevOpacityLabel">35</span>
       </span>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="section">
+    <span class="section-label" id="secPunct">标点/断句</span>
+    <div class="row">
+      <input type="checkbox" id="chkPunct" checked>
+      <label for="chkPunct" id="showPunct">流式标点添加</label>
+      <span class="note" id="punctNote">(可能降低识别准确率)</span>
+    </div>
+    <div class="row">
+      <span class="slider-group" style="flex:1;">
+        <span class="slider-label" id="endpointLabel1">句尾停顿(秒)</span>
+        <input type="range" id="endpointRule1" min="2" max="20" value="8">
+        <span class="slider-value" id="endpointVal1">0.8s</span>
+      </span>
+    </div>
+    <div class="row">
+      <span class="slider-group" style="flex:1;">
+        <span class="slider-label" id="endpointLabel2">句中停顿(秒)</span>
+        <input type="range" id="endpointRule2" min="2" max="15" value="6">
+        <span class="slider-value" id="endpointVal2">0.6s</span>
+      </span>
+    </div>
+    <div class="row">
+      <span class="slider-group" style="flex:1;">
+        <span class="slider-label" id="endpointLabel3">最大句长(秒)</span>
+        <input type="range" id="endpointRule3" min="5" max="40" value="15">
+        <span class="slider-value" id="endpointVal3">15s</span>
+      </span>
+      <button id="btnResetEndpoint" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.5 15.5a9 9 0 1 0 2.12-9.36L1 10"/></svg>
+        <span id="resetEndpointLabel">默认</span>
+      </button>
     </div>
   </div>
 

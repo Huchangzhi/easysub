@@ -57,9 +57,8 @@ chrome.runtime.onConnect.addListener((port) => {
           (async () => { sendToTab(id, { type: 'TEXT_CHANGED', text: await t('waiting') }); })();
           chrome.storage.local.get('tmspeech_prefs').then(r => {
             const prefs = (r['tmspeech_prefs'] as any) || {};
-            if (prefs.fontSize) {
-              sendToTab(id, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
-            }
+            if (prefs.fontSize) sendToTab(id, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
+            sendToTab(id, { type: 'SET_PREV_OPTS', showPrev: prefs.showPrev !== false, prevOpacity: prefs.prevOpacity ?? 35 });
           });
           sendToPopup({ type: 'STATUS_CHANGED', status: 'Running' });
         }
@@ -145,6 +144,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         chrome.storage.local.get('tmspeech_prefs').then(r => {
           const prefs = (r['tmspeech_prefs'] as any) || {};
           if (prefs.fontSize) sendToTab(captureTabId!, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
+          sendToTab(captureTabId!, { type: 'SET_PREV_OPTS', showPrev: prefs.showPrev !== false, prevOpacity: prefs.prevOpacity ?? 35 });
         });
       }
 
@@ -157,7 +157,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
       const punctPref = (await chrome.storage.local.get('tmspeech_use_punct'))['tmspeech_use_punct'];
-      const initMsg = { type: 'INIT_OFFSCREEN', streamId, tabId: msg.tabId, lang, usePunct: punctPref !== false };
+      const prefs = ((await chrome.storage.local.get('tmspeech_prefs'))['tmspeech_prefs'] as any) || {};
+      const initMsg: any = { type: 'INIT_OFFSCREEN', streamId, tabId: msg.tabId, lang, usePunct: punctPref !== false };
+      if (prefs.endpointRule1) initMsg.endpointRule1 = prefs.endpointRule1;
+      if (prefs.endpointRule2) initMsg.endpointRule2 = prefs.endpointRule2;
+      if (prefs.endpointRule3) initMsg.endpointRule3 = prefs.endpointRule3;
       if (offscreenPort) {
         offscreenPort.postMessage(initMsg);
       } else {
@@ -207,6 +211,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'SET_FONT_SIZE') {
     if (captureTabId) sendToTab(captureTabId, { type: 'SET_FONT_SIZE', fontSize: msg.fontSize });
+  }
+
+  if (msg.type === 'SET_PREV_OPTS') {
+    if (captureTabId) sendToTab(captureTabId, { type: 'SET_PREV_OPTS', showPrev: msg.showPrev, prevOpacity: msg.prevOpacity });
+  }
+
+  if (msg.type === 'SET_ENDPOINT') {
+    if (offscreenPort) offscreenPort.postMessage({ type: 'SET_ENDPOINT', rule1: msg.rule1, rule2: msg.rule2, rule3: msg.rule3 });
   }
 
   if (msg.type === 'LOCK_CHANGED_FROM_CONTENT') {
