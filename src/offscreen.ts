@@ -1,5 +1,6 @@
 import { Pipeline, JobStatus } from './pipeline';
 import { tSync } from './i18n';
+import { addPunctuation } from './punctuator';
 
 let pipeline: Pipeline | null = null;
 let port: chrome.runtime.Port;
@@ -7,6 +8,8 @@ let reconnectTabId: number | null = null;
 let reconnectStreamId: string | null = null;
 let currentLang = 'zh_CN';
 let lastText = '';
+let prevSentence = '';
+let usePunct = true;
 
 function log(msg: string) {
   console.log('[易字幕 Offscreen]', msg);
@@ -36,6 +39,7 @@ function setupPort() {
       reconnectTabId = msg.tabId || null;
       reconnectStreamId = msg.streamId || null;
       if (msg.lang) currentLang = msg.lang;
+      usePunct = msg.usePunct !== false;
 
       pipeline?.stop();
       pipeline = null;
@@ -43,12 +47,16 @@ function setupPort() {
       pipeline = new Pipeline({
         onTextChanged: (text) => {
           lastText = text;
+          sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: text });
           sendSafe('FW_CT', { type: 'TEXT_CHANGED', text });
           sendSafe('FW_POP', { type: 'TEXT_CHANGED', text });
         },
         onSentenceDone: (text) => {
-          sendSafe('FW_CT', { type: 'SENTENCE_DONE', text, isFinal: true });
-          sendSafe('FW_POP', { type: 'SENTENCE_DONE', text });
+          prevSentence = usePunct ? addPunctuation(text) : text;
+          lastText = '';
+          sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: '' });
+          sendSafe('FW_CT', { type: 'SENTENCE_DONE', text: prevSentence, isFinal: true });
+          sendSafe('FW_POP', { type: 'SENTENCE_DONE', text: prevSentence });
         },
         onStatusChanged: (status) => {
           sendSafe('FW_POP', { type: 'STATUS_CHANGED', status: JobStatus[status] });
@@ -72,8 +80,14 @@ function setupPort() {
       });
     }
 
+    if (msg.type === 'SET_PUNCT') {
+      usePunct = msg.enabled !== false;
+      log('标点功能: ' + (usePunct ? '开' : '关'));
+    }
+
     if (msg.type === 'RESEND_CURRENT_TEXT') {
-      if (lastText) {
+      if (lastText || prevSentence) {
+        sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: lastText });
         sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: lastText });
         sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: lastText });
       }

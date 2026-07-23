@@ -2,6 +2,7 @@ import { tSync } from './i18n';
 console.log('[TM Content] loaded');
 
 let overlay: HTMLDivElement | null = null;
+let prevEl: HTMLDivElement | null = null;
 let textEl: HTMLDivElement | null = null;
 let lockBtn: HTMLButtonElement | null = null;
 let _locked = false;
@@ -79,17 +80,25 @@ function create() {
     if (r.tmspeech_locked) { _locked = true; applyLock(); }
   });
 
+  prevEl = document.createElement('div');
   textEl = document.createElement('div');
   chrome.storage.local.get(['tmspeech_prefs', 'tmspeech_lang']).then(r => {
     const prefs = (r['tmspeech_prefs'] as any) || {};
     const lang = (r['tmspeech_lang'] as string) || 'zh_CN';
     const fs = prefs.fontSize || 36;
+    const baseStyle = `color:#fff;font-size:${fs}px;font-weight:600;line-height:1.4;text-shadow:0 1px 10px rgba(0,0,0,0.8);word-break:break-word;`;
+    if (prevEl) {
+      prevEl.style.cssText = baseStyle;
+      prevEl.style.display = 'none';
+      if (!REDUCED) prevEl.style.transition = 'opacity 120ms cubic-bezier(0.23,1,0.32,1)';
+    }
     if (textEl) {
-      textEl.style.cssText = `color:#fff;font-size:${fs}px;font-weight:600;line-height:1.4;text-shadow:0 1px 10px rgba(0,0,0,0.8);word-break:break-word;`;
+      textEl.style.cssText = baseStyle;
       if (!REDUCED) textEl.style.transition = 'opacity 120ms cubic-bezier(0.23,1,0.32,1)';
       textEl.textContent = tSync(lang, 'loadingModel');
     }
   });
+  overlay.appendChild(prevEl);
   overlay.appendChild(textEl);
 
   addLockButton();
@@ -250,7 +259,7 @@ function destroy() {
   if (!overlay) return;
   cancelAnim();
   const el = overlay;
-  overlay = null; textEl = null; lockBtn = null;
+  overlay = null; prevEl = null; textEl = null; lockBtn = null;
   if (saveTimer) clearTimeout(saveTimer);
   if (!REDUCED) {
     el.style.transition = 'opacity 150ms ease-out, transform 150ms ease-out';
@@ -307,6 +316,26 @@ function setText(text: string) {
   }
 }
 
+function setOverlayText(prev: string, current: string) {
+  const pe = prevEl, te = textEl;
+  if (!pe || !te) return;
+  if (!REDUCED) {
+    pe.style.opacity = '0';
+    te.style.opacity = '0';
+    setTimeout(() => {
+      pe.textContent = prev;
+      pe.style.display = prev ? '' : 'none';
+      te.textContent = current;
+      pe.style.opacity = '1';
+      te.style.opacity = '1';
+    }, 60);
+  } else {
+    pe.textContent = prev;
+    pe.style.display = prev ? '' : 'none';
+    te.textContent = current;
+  }
+}
+
 // 监听扩展断开，自动隐藏字幕
 (function monitorExtension() {
   const port = chrome.runtime.connect({ name: 'content' });
@@ -316,6 +345,9 @@ function setText(text: string) {
 chrome.runtime.onMessage.addListener((msg) => {
   switch (msg.type) {
     case 'PING':
+      break;
+    case 'OVERLAY_TEXT':
+      setOverlayText(msg.prev || '', msg.current || '');
       break;
     case 'TEXT_CHANGED':
       setText(msg.text);
@@ -329,6 +361,7 @@ chrome.runtime.onMessage.addListener((msg) => {
       applyLock();
       break;
     case 'SET_FONT_SIZE':
+      if (prevEl) { prevEl.style.fontSize = msg.fontSize + 'px'; }
       if (textEl) { textEl.style.fontSize = msg.fontSize + 'px'; scheduleSave(); }
       break;
     case 'RESET_OVERLAY_POSITION':

@@ -6,6 +6,7 @@ const statusDot = $('statusDot');
 const btnStart = $('btnStart') as HTMLButtonElement;
 const btnStop = $('btnStop') as HTMLButtonElement;
 const chkOverlay = $('chkOverlay') as HTMLInputElement;
+const chkPunct = $('chkPunct') as HTMLInputElement;
 const textPreview = $('textPreview');
 const modelStatus = $('modelStatus');
 const btnLock = $('btnLock') as HTMLButtonElement;
@@ -46,6 +47,7 @@ async function applyLang() {
   $('clearLabel').textContent = tr('clearTranscript');
   $('disclaimer').textContent = tr('disclaimer');
   $('resetOverlayLabel').textContent = tr('resetPosition');
+  $('showPunct').textContent = tr('showPunct');
   btnLang.textContent = tr('langSwitch');
   updateLockUI();
   renderTranscript();
@@ -106,6 +108,12 @@ btnStop.onclick = () => {
 
 chkOverlay.onchange = () => {
   chrome.runtime.sendMessage({ type: 'OVERLAY_TOGGLE', visible: chkOverlay.checked }).catch(() => {});
+};
+
+chkPunct.onchange = () => {
+  const val = chkPunct.checked;
+  chrome.storage.local.set({ tmspeech_use_punct: val });
+  chrome.runtime.sendMessage({ type: 'SET_PUNCT', enabled: val }).catch(() => {});
 };
 
 btnResetOverlay.onclick = () => {
@@ -208,6 +216,9 @@ function escapeHtml(s: string): string {
 loadPrefs();
 loadTranscript();
 applyLang();
+chrome.storage.local.get('tmspeech_use_punct').then(r => {
+  chkPunct.checked = r['tmspeech_use_punct'] !== false;
+});
 chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((resp: any) => {
   if (resp?.status) setStatus(resp.status);
   if (resp?.locked !== undefined) { locked = resp.locked; updateLockUI(); }

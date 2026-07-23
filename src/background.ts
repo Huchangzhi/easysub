@@ -156,7 +156,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       await ensureOffscreen();
 
       const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
-      const initMsg = { type: 'INIT_OFFSCREEN', streamId, tabId: msg.tabId, lang };
+      const punctPref = (await chrome.storage.local.get('tmspeech_use_punct'))['tmspeech_use_punct'];
+      const initMsg = { type: 'INIT_OFFSCREEN', streamId, tabId: msg.tabId, lang, usePunct: punctPref !== false };
       if (offscreenPort) {
         offscreenPort.postMessage(initMsg);
       } else {
@@ -215,6 +216,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'STOP_RECOGNITION') {
     cleanupAll();
+  }
+
+  if (msg.type === 'SET_PUNCT') {
+    if (offscreenPort) offscreenPort.postMessage({ type: 'SET_PUNCT', enabled: msg.enabled });
   }
 
   if (msg.type === 'RESET_OVERLAY_POSITION') {
