@@ -1,8 +1,16 @@
 param(
+  [switch]$Lite,
   [string]$Version = "1.13.4"
 )
 
-$url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${Version}/sherpa-onnx-wasm-simd-v${Version}-zh-en-asr-zipformer.tar.bz2"
+if ($Lite) {
+  $url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${Version}/sherpa-onnx-wasm-simd-v${Version}-zh-en-asr-zipformer.tar.bz2"
+  Write-Host "下载 sherpa-onnx WASM lite v${Version}..." -ForegroundColor Yellow
+} else {
+  $url = "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/v1.0.0/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"
+  Write-Host "下载 sherpa-onnx WASM full..." -ForegroundColor Yellow
+}
+
 $out = "$env:TEMP\wasm.tar.bz2"
 $tmpDir = "$env:TEMP\wasm-extract"
 $target = "public/wasm"
@@ -12,7 +20,6 @@ if (Test-Path "$target/sherpa-onnx-wasm-main-asr.data") {
   exit 0
 }
 
-Write-Host "下载 sherpa-onnx WASM v${Version}..." -ForegroundColor Yellow
 curl.exe -L -o $out $url
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

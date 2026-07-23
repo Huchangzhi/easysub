@@ -10,3 +10,4 @@ public/wasm/test*
 sherpa-onnx-wasm-simd-*
 .model-tmp
 models
+TMSpeech-wasm-builder/

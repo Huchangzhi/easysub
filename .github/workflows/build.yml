@@ -25,10 +25,9 @@ jobs:
 
       - name: Download sherpa-onnx WASM
         run: |
-          VERSION="1.13.4"
           TMPDIR=$(mktemp -d)
           curl -sL \
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${VERSION}/sherpa-onnx-wasm-simd-v${VERSION}-zh-en-asr-zipformer.tar.bz2" \
+            "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/v1.0.0/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
             | tar xj -C "$TMPDIR"
           mkdir -p public/wasm
           find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
@@ -51,9 +50,46 @@ jobs:
           name: extension${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' && format('-v{0}', github.event.inputs.version) || '' }}
           path: dist/
 
+  build-lite:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Download sherpa-onnx WASM (lite)
+        run: |
+          TMPDIR=$(mktemp -d)
+          curl -sL \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-wasm-simd-v1.13.4-zh-en-asr-zipformer.tar.bz2" \
+            | tar xj -C "$TMPDIR"
+          mkdir -p public/wasm
+          find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
+          rm -rf "$TMPDIR"
+          rm -f public/wasm/index.html public/wasm/app-asr.js
+          ls -lh public/wasm/
+
+      - name: Set release version
+        run: |
+          V=${{ github.event.inputs.version }}
+          sed -i "s/开发版本/v$V/g" src/popup.html src/i18n.ts
+          sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" package.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" manifest.json
+
+      - run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-lite-v${{ github.event.inputs.version }}
+          path: dist/
+
   release:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
-    needs: build
+    needs: [build, build-lite]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -63,10 +99,20 @@ jobs:
           name: extension-v${{ github.event.inputs.version }}
           path: dist
 
-      - name: Package extension
+      - name: Package extension (full)
         run: |
           cd dist
-          zip -r ../easysub-v${{ github.event.inputs.version }}.zip .
+          zip -r ../easysub-v${{ github.event.inputs.version }}-full.zip .
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-lite-v${{ github.event.inputs.version }}
+          path: dist-lite
+
+      - name: Package extension (lite)
+        run: |
+          cd dist-lite
+          zip -r ../easysub-v${{ github.event.inputs.version }}-lite.zip .
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -76,7 +122,19 @@ jobs:
           body: |
             ## EasySub v${{ github.event.inputs.version }}
 
+            ### full（默认）
+            - 模型: Zipformer 中英双语, fp32 全精度
+            - 大小: ~357MB
+            - 精度更高，适合需要最佳识别质量的场景
+
+            ### lite
+            - 模型: Zipformer 中英双语, int8 量化
+            - 大小: ~150MB
+            - 体积更小、速度更快，适合资源受限的场景
+
             Chrome → 扩展程序 → 加载已解压的扩展 → 选择解压后的目录
-          files: easysub-v${{ github.event.inputs.version }}.zip
+          files: |
+            easysub-v${{ github.event.inputs.version }}-full.zip
+            easysub-v${{ github.event.inputs.version }}-lite.zip
           draft: false
           prerelease: false

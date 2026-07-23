@@ -26,8 +26,10 @@
 
 ```bash
 npm install
-# 首次构建需要下载模型
+# 首次构建需要下载模型 (full 版, 357MB)
 npm run download-wasm
+# 如需轻量版 (lite, 150MB) 使用:
+# npm run download-wasm -- --lite
 npm run build
 ```
 
@@ -36,7 +38,7 @@ npm run build
 ## 技术栈
 
 - **识别引擎**: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/) WASM 离线推理
-- **模型**: Zipformer 中英双语（INT8 量化）
+- **模型**: Zipformer 中英双语 — [full] 全量版 (fp32, 357MB) / [lite] 轻量版 (int8, 150MB)
 - **架构**: Chrome Extension Manifest V3
 
 ## 鸣谢
