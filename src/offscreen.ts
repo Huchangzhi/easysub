@@ -70,6 +70,18 @@ function setupPort() {
 
       (async () => {
         await waitForWasm();
+        // pitfall: 标点模型按需加载，关掉功能就不创建 OfflinePunctuation
+        // 注意 window.OfflinePunctuation 需要 punctuation.js 末尾显式赋值
+        // （class 声明不会自动挂到 window 上）
+        if (usePunct && !(window as any).__punctuator) {
+          try {
+            (window as any).__punctuator = new (window as any).OfflinePunctuation({
+              model: { ctTransformer: 'model.punct.int8.onnx', numThreads: 1, provider: 'cpu' }
+            }, (window as any).Module);
+          } catch (e) {
+            log('标点模型初始化失败: ' + e);
+          }
+        }
         const waitingText = tSync(currentLang, 'waiting');
         sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: waitingText });
         sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: waitingText });

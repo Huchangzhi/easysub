@@ -35,6 +35,8 @@ module.exports = {
       filename: 'popup.html',
       chunks: ['popup'],
     }),
+    // pitfall: HtmlPlugin 会自动注入 <script defer src="offscreen.js">，
+    // 所以 template 里不能手动写 <script src="offscreen.js">，否则同一文件执行两遍
     new HtmlPlugin({
       template: 'src/offscreen.html',
       filename: 'offscreen.html',

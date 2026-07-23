@@ -113,6 +113,9 @@ function lowercased(text: string): string {
 }
 
 export function addPunctuation(text: string): string {
+  const p = (window as any).__punctuator
+  if (p) return p.addPunct(text.trim())
+
   const t = text.trim()
   if (!t) return t
 

@@ -5,6 +5,7 @@ public/wasm/*.data
 public/wasm/*.wasm
 public/wasm/*.js
 !public/wasm/preload.js
+public/wasm/*.onnx
 public/wasm/index.html
 public/wasm/test*
 sherpa-onnx-wasm-simd-*

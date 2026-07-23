@@ -4,11 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>易字幕 Offscreen</title>
+  <!-- pitfall: 不要在此处加 <script src="offscreen.js">，
+       HtmlPlugin 会自动注入 <script defer src="offscreen.js">，
+       手动加会导致同一文件执行两遍 -->
 </head>
 <body>
   <script src="wasm/preload.js"></script>
   <script src="wasm/sherpa-onnx-wasm-main-asr.js"></script>
   <script src="wasm/sherpa-onnx-asr.js"></script>
-  <script src="offscreen.js"></script>
+  <script src="wasm/sherpa-onnx-punctuation.js"></script>
 </body>
 </html>
