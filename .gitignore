@@ -5,6 +5,8 @@ public/wasm/*.data
 public/wasm/*.wasm
 public/wasm/*.js
 !public/wasm/preload.js
+!public/wasm/sherpa-onnx-asr.js
+!public/wasm/sherpa-onnx-punctuation.js
 public/wasm/*.onnx
 public/wasm/index.html
 public/wasm/test*
