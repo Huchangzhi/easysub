@@ -32,10 +32,10 @@ jobs:
           curl -sL \
             "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
             | tar xj -C "$TMPDIR"
-          rm -f "$TMPDIR"/sherpa-onnx-asr.js "$TMPDIR"/sherpa-onnx-punctuation.js
           mkdir -p public/wasm
           find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
           rm -rf "$TMPDIR"
+          git restore public/wasm/sherpa-onnx-asr.js public/wasm/sherpa-onnx-punctuation.js
           rm -f public/wasm/index.html public/wasm/app-asr.js
           ls -lh public/wasm/
 
@@ -71,10 +71,10 @@ jobs:
           curl -sL \
             "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20-lite.tar.bz2" \
             | tar xj -C "$TMPDIR"
-          rm -f "$TMPDIR"/sherpa-onnx-asr.js "$TMPDIR"/sherpa-onnx-punctuation.js
           mkdir -p public/wasm
           find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
           rm -rf "$TMPDIR"
+          git restore public/wasm/sherpa-onnx-asr.js public/wasm/sherpa-onnx-punctuation.js
           rm -f public/wasm/index.html public/wasm/app-asr.js
           ls -lh public/wasm/
 
