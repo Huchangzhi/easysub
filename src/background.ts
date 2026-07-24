@@ -72,6 +72,7 @@ chrome.runtime.onConnect.addListener((port) => {
     offscreenPort = null;
     if (pipelineStatus !== 'Running') return;
     console.log('[TM BG] offscreen 断开，等待重连...');
+    // ponytail: 3s 超时与 offscreen 重连竞争，offscreen 重连后 bg 已清理则不一致
     reconnectTimer = setTimeout(() => {
       if (pipelineStatus !== 'Running') return;
       console.log('[TM BG] 重连超时，清理');

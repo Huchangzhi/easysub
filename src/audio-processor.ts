@@ -136,6 +136,8 @@ function processStream(
       ctx = new AudioContext();
     }
     const source = ctx.createMediaStreamSource(stream);
+    // ponytail: ScriptProcessorNode 已废弃，主线程阻塞时会丢帧
+    // 仅在 AudioWorklet 不可用时作为降级（最终会被 Chrome 移除）
     const node = ctx.createScriptProcessor(4096, 1, 1);
     node.onaudioprocess = (e) => {
       if (!stopped) callback(new Float32Array(e.inputBuffer.getChannelData(0)));

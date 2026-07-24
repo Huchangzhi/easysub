@@ -37,6 +37,7 @@ export class Pipeline {
 
     this.status = JobStatus.Running;
     this.cancelled = false;
+    // ponytail: createStream 无 try/catch，失败则潜入 Running 但 stream 为 null
     this.stream = r.createStream();
     this.events.onStatusChanged(JobStatus.Running);
     log('识别流已创建');
@@ -59,6 +60,7 @@ export class Pipeline {
     if (!r) return;
 
     this.stream.acceptWaveform(16000, samples);
+    // ponytail: isReady 可能永不返回 false（极低概率），无迭代限制，阻塞主线程
     while (r.isReady(this.stream)) {
       r.decode(this.stream);
     }

@@ -64,9 +64,11 @@ async function startAudioCapture(streamId: string) {
 }
 
 async function startWorkletCapture(stream: MediaStream) {
+  // ponytail: AudioWorklet 在独立音频线程持续读帧，主线程标点阻塞时照常缓冲
   audioCtx = new AudioContext();
   const source = audioCtx.createMediaStreamSource(stream);
   const url = chrome.runtime.getURL('audio-worklet-processor.js');
+  // ponytail: audioWorklet.addModule 必须用扩展 URL（blob 被 CSP 'self' 拦截）
   await audioCtx.audioWorklet.addModule(url);
 
   workletNode = new AudioWorkletNode(audioCtx, 'audio-buffer');
@@ -130,6 +132,8 @@ function setupPort() {
   port.onMessage.addListener((msg) => {
     try {
     if (msg.type === 'INIT_OFFSCREEN') {
+      // ponytail: INIT_OFFSCREEN 可能触发两次（重连），__recognizer/__punctuator 只创建一次
+      // ponytail: WASM 无法二次加载模型，重建 recognizer 需重启整个 offscreen 文档
       log('收到 INIT_OFFSCREEN');
       reconnectTabId = msg.tabId || null;
       reconnectStreamId = msg.streamId || null;
@@ -149,6 +153,8 @@ function setupPort() {
             sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: display })
             sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: display })
             if (!punctPending) {
+              // ponytail: setTimeout(0) 推迟标点推理，避免同步阻塞 audio pump 丢帧
+              // ponytail: lastPunctText 缓存上次结果过渡显示，onSentenceDone 清空防止闪旧文
               punctPending = true;
               setTimeout(() => {
                 punctPending = false;
@@ -165,6 +171,8 @@ function setupPort() {
           }
         },
         onSentenceDone: (text) => {
+          // ponytail: addPunctuation 同步调 CT-Transformer 模型推理，会阻塞主线程
+          // AudioWorklet 在音频线程持续缓冲，解阻塞后 pipeline 处理积压帧
           prevSentence = usePunct ? addPunctuation(text) : text;
           lastText = '';
           lastPunctText = '';

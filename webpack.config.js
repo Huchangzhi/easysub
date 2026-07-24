@@ -9,7 +9,7 @@ module.exports = {
     popup: './src/popup.ts',
     offscreen: './src/offscreen.ts',
     permission: './src/permission.ts',
-    i18n: './src/i18n.ts',
+    i18n: './src/i18n.ts', // ponytail: 纯导出模块做 entry 生成孤立 i18n.js，不被任何页面引用
   },
   module: {
     rules: [

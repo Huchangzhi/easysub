@@ -106,6 +106,7 @@ function create() {
       textEl.style.cssText = baseStyle;
       if (!REDUCED) textEl.style.transition = 'opacity 120ms cubic-bezier(0.23,1,0.32,1)';
       textEl.textContent = tSync(lang, 'loadingModel');
+      // ponytail: _pendingText 处理 TEXT_CHANGED 先于 overlay 创建（重连时），create 后立即替换
       if (_pendingText) { textEl.textContent = _pendingText; _pendingText = ''; }
     }
   });
