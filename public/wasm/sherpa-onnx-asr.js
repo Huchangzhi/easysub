@@ -1,3 +1,10 @@
+// ⚠️ 补丁版本 — 不要用 release 的原始版替换
+// 原始版有 3 个 bug：
+//   1. createOnlineRecognizer 中用 myConfig 直接替换 entire config
+//      导致 modelConfig 丢失 → "Cannot use 'in' on undefined"
+//   2. 缺少 module.exports 的 typeof process 守卫（浏览器中 ReferenceError）
+//   3. 原始版被 JS minifier 压缩，此处为可读的修复版
+// 若更新 WASM，请重新应用 Object.assign 合并 + process 守卫
 function freeConfig(config, Module) {
   if ('buffer' in config) {
     Module._free(config.buffer);

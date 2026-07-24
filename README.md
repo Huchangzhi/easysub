@@ -33,6 +33,10 @@ npm run download-wasm
 npm run build
 ```
 
+> ⚠️ `public/wasm/sherpa-onnx-asr.js` 和 `public/wasm/sherpa-onnx-punctuation.js`
+> 是**补丁版本**，修复了 WASM builder release 中 config 被替换、module 守卫缺失的 bug。
+> 若更新 WASM，务必重新应用或保留 git 跟踪的版本，不要直接替换。
+
 然后 Chrome → 扩展程序 → 加载已解压的扩展 → 选择 `dist/` 目录。
 
 ## 技术栈

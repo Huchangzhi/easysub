@@ -23,12 +23,16 @@ jobs:
 
       - run: npm ci
 
+      # ⚠️ public/wasm/sherpa-onnx-asr.js 和 sherpa-onnx-punctuation.js
+      # 使用 git 跟踪的补丁版（修复了 config 合并 + typeof process 守卫），
+      # 不要用 release 的原始文件覆盖它们。
       - name: Download sherpa-onnx WASM
         run: |
           TMPDIR=$(mktemp -d)
           curl -sL \
             "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
             | tar xj -C "$TMPDIR"
+          rm -f "$TMPDIR"/sherpa-onnx-asr.js "$TMPDIR"/sherpa-onnx-punctuation.js
           mkdir -p public/wasm
           find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
           rm -rf "$TMPDIR"
@@ -67,6 +71,7 @@ jobs:
           curl -sL \
             "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20-lite.tar.bz2" \
             | tar xj -C "$TMPDIR"
+          rm -f "$TMPDIR"/sherpa-onnx-asr.js "$TMPDIR"/sherpa-onnx-punctuation.js
           mkdir -p public/wasm
           find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
           rm -rf "$TMPDIR"

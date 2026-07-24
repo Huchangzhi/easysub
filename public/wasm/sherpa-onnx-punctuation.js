@@ -1,3 +1,6 @@
+// ⚠️ 补丁版本 — 不要用 release 的原始版替换
+// 原始版缺少 typeof process 守卫，浏览器中 module 未定义直接炸
+// 若更新 WASM，请重新添加 if(typeof process=='object'...) 包裹 module.exports
 function freeConfig(config, Module) {
   if ('buffer' in config) {
     Module._free(config.buffer);
