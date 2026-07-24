@@ -1,6 +1,7 @@
 import { Pipeline, JobStatus } from './pipeline';
 import { tSync } from './i18n';
 import { addPunctuation } from './punctuator';
+import { resample } from './audio-processor';
 
 let pipeline: Pipeline | null = null;
 let port: chrome.runtime.Port;
@@ -12,6 +13,12 @@ let prevSentence = '';
 let usePunct = true;
 let punctPending = false;
 let lastPunctText = '';
+let audioCtx: AudioContext | null = null;
+let workletNode: AudioWorkletNode | null = null;
+let audioEl: HTMLAudioElement | null = null;
+let captureStream: MediaStream | null = null;
+let fallbackCleanup: (() => void) | null = null;
+let flushTimer: any = null;
 
 declare function createOnlineRecognizer(Module: any, config: any): any;
 
@@ -24,12 +31,95 @@ function sendSafe(type: string, payload: any) {
   try { port.postMessage({ type, payload }); } catch {}
 }
 
+function stopAudio() {
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  if (workletNode) { workletNode.port.postMessage('stop'); workletNode.disconnect(); workletNode = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  fallbackCleanup?.();
+  fallbackCleanup = null;
+  if (audioEl) { audioEl.pause(); audioEl.srcObject = null; audioEl = null; }
+  if (captureStream) { captureStream.getTracks().forEach(t => t.stop()); captureStream = null; }
+}
+
+async function startAudioCapture(streamId: string) {
+  const stream: MediaStream = await (navigator.mediaDevices.getUserMedia as any)({
+    audio: {
+      mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId },
+    },
+  });
+  captureStream = stream;
+  audioEl = document.createElement('audio');
+  audioEl.srcObject = stream;
+  audioEl.play().catch(() => {});
+
+  if ((self as any).AudioWorklet) {
+    try {
+      await startWorkletCapture(stream);
+      return;
+    } catch (e) {
+      log('AudioWorklet 启动失败，降级: ' + e);
+    }
+  }
+  startFallbackCapture(stream);
+}
+
+async function startWorkletCapture(stream: MediaStream) {
+  audioCtx = new AudioContext();
+  const source = audioCtx.createMediaStreamSource(stream);
+  const url = chrome.runtime.getURL('audio-worklet-processor.js');
+  await audioCtx.audioWorklet.addModule(url);
+
+  workletNode = new AudioWorkletNode(audioCtx, 'audio-buffer');
+  source.connect(workletNode);
+
+  workletNode.port.onmessage = (e: MessageEvent) => {
+    if (e.data && e.data.audio) {
+      const buf = new Float32Array(e.data.audio);
+      if (buf.length > 0) {
+        const sr = e.data.sampleRate || audioCtx!.sampleRate;
+        pipeline?.feedAudio(sr === 16000 ? buf : resample(buf, sr, 16000));
+      }
+    }
+  };
+
+  function scheduleFlush() {
+    flushTimer = setTimeout(() => {
+      workletNode?.port.postMessage('flush');
+      scheduleFlush();
+    }, 60);
+  }
+  scheduleFlush();
+}
+
+function startFallbackCapture(stream: MediaStream) {
+  let ctx: AudioContext;
+  try {
+    ctx = new AudioContext({ sampleRate: 16000 });
+  } catch {
+    ctx = new AudioContext();
+  }
+  audioCtx = ctx;
+  const source = ctx.createMediaStreamSource(stream);
+  const node = ctx.createScriptProcessor(16384, 1, 1);
+  node.onaudioprocess = (e) => {
+    const buf = new Float32Array(e.inputBuffer.getChannelData(0));
+    pipeline?.feedAudio(ctx.sampleRate === 16000 ? buf : resample(buf, ctx.sampleRate, 16000));
+  };
+  source.connect(node);
+  ctx.resume().catch(() => {});
+  fallbackCleanup = () => {
+    node.disconnect();
+    source.disconnect();
+    ctx.close().catch(() => {});
+  };
+}
+
 function setupPort() {
   port = chrome.runtime.connect({ name: 'offscreen' });
 
   port.onDisconnect.addListener(() => {
     console.log('[TM Offscreen] 端口断开');
-    if (!pipeline) return; // 已停止，不重连
+    if (!pipeline) return;
     console.log('[TM Offscreen] 管道还在运行，1 秒后重连...');
     setTimeout(() => {
       setupPort();
@@ -46,6 +136,7 @@ function setupPort() {
       if (msg.lang) currentLang = msg.lang;
       usePunct = msg.usePunct !== false;
 
+      stopAudio();
       pipeline?.stop();
       pipeline = null;
 
@@ -116,7 +207,8 @@ function setupPort() {
         const waitingText = tSync(currentLang, 'waiting');
         sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: waitingText });
         sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: waitingText });
-        await pipeline!.start(msg.streamId);
+        await pipeline!.start();
+        await startAudioCapture(msg.streamId);
         } catch (e: any) { log('INIT_OFFSCREEN async 异常: ' + (e?.stack || e)); throw e; }
       })().catch((e) => {
         log('Pipeline start 异常: ' + (e.message || e));
@@ -145,6 +237,7 @@ function setupPort() {
       log('收到 STOP_OFFSCREEN');
       reconnectTabId = null;
       reconnectStreamId = null;
+      stopAudio();
       pipeline?.stop();
       pipeline = null;
     }

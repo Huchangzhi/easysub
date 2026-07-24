@@ -24,7 +24,7 @@ function designLowpass(cutoff: number, numTaps: number): Float32Array {
   return taps;
 }
 
-function resample(src: Float32Array, srcRate: number, dstRate: number): Float32Array {
+export function resample(src: Float32Array, srcRate: number, dstRate: number): Float32Array {
   if (srcRate === dstRate) return src;
   const ratio = srcRate / dstRate;
   const outLen = Math.floor(src.length / ratio);

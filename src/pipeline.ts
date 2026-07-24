@@ -1,5 +1,3 @@
-import { AudioSource, TabCaptureStreamSource } from './audio-processor';
-
 export enum JobStatus { Stopped, Running }
 
 export interface PipelineEvents {
@@ -16,7 +14,6 @@ function cleanText(text: string): string {
 }
 
 export class Pipeline {
-  private source: AudioSource | null = null;
   private status = JobStatus.Stopped;
   private events: PipelineEvents;
   private cancelled = false;
@@ -29,7 +26,7 @@ export class Pipeline {
 
   getStatus() { return this.status; }
 
-  async start(streamId?: string) {
+  async start() {
     if (this.status === JobStatus.Running) return;
 
     const r = (window as any).__recognizer;
@@ -40,37 +37,14 @@ export class Pipeline {
 
     this.status = JobStatus.Running;
     this.cancelled = false;
-    this.events.onStatusChanged(JobStatus.Running);
-
     this.stream = r.createStream();
-    log('创建识别流');
-
-    this.source = new TabCaptureStreamSource(streamId!);
-
-    this.source.setCallback(this.onAudio.bind(this));
-    this.source.onStopped = () => {
-      log('音频源意外断开');
-      this.events.onError(new Error('音频源已断开'));
-    };
-
-    log('启动音频源...');
-    try {
-      await this.source.start();
-      log('音频源已启动');
-    } catch (e) {
-      log('音频源启动失败: ' + e);
-      this.events.onError(new Error(`音频源启动失败: ${e}`));
-      this.stop();
-    }
-
-    if (this.cancelled) { log('start 被取消'); this.source?.stop(); return; }
+    this.events.onStatusChanged(JobStatus.Running);
+    log('识别流已创建');
   }
 
   stop() {
     this.cancelled = true;
     this.status = JobStatus.Stopped;
-    this.source?.stop();
-    this.source = null;
     this.stream?.free();
     this.stream = null;
     this.lastText = '';
@@ -78,7 +52,7 @@ export class Pipeline {
     this.events.onTextChanged('');
   }
 
-  private onAudio(samples: Float32Array) {
+  feedAudio(samples: Float32Array) {
     if (this.status !== JobStatus.Running || !this.stream) return;
 
     const r = (window as any).__recognizer;
