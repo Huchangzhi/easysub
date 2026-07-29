@@ -9,22 +9,15 @@ let _locked = false;
 let _showPrev = true;
 let _prevOpacity = 0.35;
 let _pendingText = '';
-let animFrame: number | null = null;
 let dragState: {
   baseLeft: number; baseTop: number;
   startX: number; startY: number;
-  samples: { x: number; y: number; t: number }[];
 } | null = null;
 
 const STORAGE_KEY = 'tmspeech_overlay';
-const REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const LOCK_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg>';
 const UNLOCK_SVG = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8.5 11V7a3.5 3.5 0 0 1 6.5-2"/></svg>';
-
-function cancelAnim() {
-  if (animFrame !== null) { cancelAnimationFrame(animFrame); animFrame = null; }
-}
 
 function rubberband(overshoot: number, dimension: number, constant = 0.55): number {
   return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
@@ -69,15 +62,7 @@ function create() {
   s.boxShadow = '0 8px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)';
   s.left = '50%';
   s.top = '50%';
-  s.willChange = 'transform';
-
-  if (!REDUCED) {
-    s.opacity = '0';
-    s.transform = 'scale(0.96) translate(-50%, -50%)';
-    s.transition = 'opacity 200ms cubic-bezier(0.23,1,0.32,1), transform 200ms cubic-bezier(0.23,1,0.32,1)';
-  } else {
-    s.transform = 'translate(-50%, -50%)';
-  }
+  s.transform = 'translate(-50%, -50%)';
 
   chrome.storage.local.get('tmspeech_locked').then(r => {
     if (r.tmspeech_locked) { _locked = true; applyLock(); }
@@ -100,11 +85,9 @@ function create() {
       prevEl.style.cssText = baseStyle;
       prevEl.style.display = 'none';
       prevEl.style.opacity = String(_prevOpacity);
-      if (!REDUCED) prevEl.style.transition = 'opacity 120ms cubic-bezier(0.23,1,0.32,1)';
     }
     if (textEl) {
       textEl.style.cssText = baseStyle;
-      if (!REDUCED) textEl.style.transition = 'opacity 120ms cubic-bezier(0.23,1,0.32,1)';
       textEl.textContent = tSync(lang, 'loadingModel');
       // ponytail: _pendingText 处理 TEXT_CHANGED 先于 overlay 创建（重连时），create 后立即替换
       if (_pendingText) { textEl.textContent = _pendingText; _pendingText = ''; }
@@ -118,12 +101,6 @@ function create() {
   applyLock();
   document.body.appendChild(overlay);
 
-  if (!REDUCED) {
-    requestAnimationFrame(() => {
-      if (overlay) { overlay.style.opacity = '1'; overlay.style.transform = 'scale(1) translate(-50%, -50%)'; }
-    });
-  }
-
   chrome.storage.local.get(STORAGE_KEY).then(stored => {
     if (!overlay) return;
     const d = (stored[STORAGE_KEY] as any) || {};
@@ -133,7 +110,6 @@ function create() {
     if (d.height) overlay.style.height = d.height;
     if (d.left || d.top) {
       overlay.style.transform = 'none';
-      overlay.style.willChange = '';
     }
   });
 
@@ -149,7 +125,6 @@ function addLockButton() {
     'color:rgba(255,255,255,0.5);cursor:pointer;',
     'display:flex;align-items:center;justify-content:center;padding:0;',
     'z-index:2147483647;opacity:0;',
-    'transition:opacity 200ms cubic-bezier(0.23,1,0.32,1), background 120ms cubic-bezier(0.23,1,0.32,1);',
   ].join('');
   overlay!.appendChild(lockBtn);
 
@@ -166,17 +141,14 @@ function addDragListeners() {
 
   overlay.onpointerdown = (e) => {
     if (_locked || e.target === lockBtn) return;
-    cancelAnim();
     const rect = overlay!.getBoundingClientRect();
     dragState = {
       baseLeft: rect.left,
       baseTop: rect.top,
       startX: e.clientX,
       startY: e.clientY,
-      samples: [{ x: e.clientX, y: e.clientY, t: performance.now() }],
     };
     overlay!.setPointerCapture(e.pointerId);
-    overlay!.style.willChange = 'transform';
     if (lockBtn) lockBtn.style.opacity = '1';
   };
 
@@ -198,9 +170,6 @@ function addDragListeners() {
     if (newTop + oh > vh) dy = (vh - oh - dragState.baseTop) + rubberband(newTop + oh - vh, vh);
 
     overlay!.style.transform = `translate(${dx}px, ${dy}px)`;
-
-    dragState.samples.push({ x: e.clientX, y: e.clientY, t: performance.now() });
-    if (dragState.samples.length > 5) dragState.samples.shift();
   };
 
   overlay.onpointerup = (e) => {
@@ -208,59 +177,13 @@ function addDragListeners() {
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
 
-    let vx = 0, vy = 0;
-    if (dragState.samples.length >= 2) {
-      const first = dragState.samples[0];
-      const last = dragState.samples[dragState.samples.length - 1];
-      const dt = (last.t - first.t) / 1000;
-      if (dt > 0.001) { vx = (last.x - first.x) / dt; vy = (last.y - first.y) / dt; }
-    }
-
     const targetLeft = dragState.baseLeft + dx;
     const targetTop = dragState.baseTop + dy;
     overlay!.style.left = targetLeft + 'px';
     overlay!.style.top = targetTop + 'px';
     overlay!.style.transform = 'none';
-    overlay!.style.willChange = '';
 
-    const speed = Math.sqrt(vx * vx + vy * vy);
-    if (!REDUCED && speed > 80) {
-      const ow = overlay!.offsetWidth;
-      const oh = overlay!.offsetHeight;
-      let projL = targetLeft + vx * 0.12;
-      let projT = targetTop + vy * 0.12;
-      const margin = 10;
-      const maxL = window.innerWidth - ow - margin;
-      const maxT = window.innerHeight - oh - margin;
-      projL = Math.max(margin, Math.min(projL, maxL));
-      projT = Math.max(margin, Math.min(projT, maxT));
-
-      let pL = targetLeft, pT = targetTop;
-      let vL = vx, vT = vy;
-      const k = 0.008, f = 0.78;
-
-      function settle() {
-        const dL = projL - pL, dT = projT - pT;
-        vL += dL * k; vT += dT * k;
-        vL *= f; vT *= f;
-        pL += vL; pT += vT;
-        overlay!.style.left = pL + 'px';
-        overlay!.style.top = pT + 'px';
-
-        if (Math.abs(vL) < 0.1 && Math.abs(vT) < 0.1 && Math.abs(dL) < 0.5 && Math.abs(dT) < 0.5) {
-          overlay!.style.left = projL + 'px';
-          overlay!.style.top = projT + 'px';
-          animFrame = null;
-          scheduleSave();
-          return;
-        }
-        animFrame = requestAnimationFrame(settle);
-      }
-      animFrame = requestAnimationFrame(settle);
-    } else {
-      scheduleSave();
-    }
-
+    scheduleSave();
     dragState = null;
   };
 
@@ -269,18 +192,10 @@ function addDragListeners() {
 
 function destroy() {
   if (!overlay) return;
-  cancelAnim();
   const el = overlay;
   overlay = null; prevEl = null; textEl = null; lockBtn = null;
   if (saveTimer) clearTimeout(saveTimer);
-  if (!REDUCED) {
-    el.style.transition = 'opacity 150ms ease-out, transform 150ms ease-out';
-    el.style.opacity = '0';
-    el.style.transform = 'scale(0.96)';
-    setTimeout(() => el.remove(), 150);
-  } else {
-    el.remove();
-  }
+  el.remove();
 }
 
 function toggleLock() {
@@ -318,35 +233,16 @@ function applyLock() {
 
 function setText(text: string) {
   if (!textEl) { _pendingText = text; return; }
-  if (!REDUCED) {
-    textEl.style.opacity = '0';
-    setTimeout(() => {
-      if (textEl) { textEl.textContent = text; textEl.style.opacity = '1'; }
-    }, 60);
-  } else {
-    textEl.textContent = text;
-  }
+  textEl.textContent = text;
 }
 
 function setOverlayText(prev: string, current: string) {
   const pe = prevEl, te = textEl;
   if (!pe || !te) return;
   const showPrev = _showPrev && prev;
-  if (!REDUCED) {
-    pe.style.opacity = '0';
-    te.style.opacity = '0';
-    setTimeout(() => {
-      pe.textContent = prev;
-      pe.style.display = showPrev ? '' : 'none';
-      te.textContent = current;
-      pe.style.opacity = String(_prevOpacity);
-      te.style.opacity = '1';
-    }, 60);
-  } else {
-    pe.textContent = prev;
-    pe.style.display = showPrev ? '' : 'none';
-    te.textContent = current;
-  }
+  pe.textContent = prev;
+  pe.style.display = showPrev ? '' : 'none';
+  te.textContent = current;
 }
 
 // 监听扩展断开，自动隐藏字幕
@@ -390,13 +286,6 @@ chrome.runtime.onMessage.addListener((msg) => {
         overlay.style.transform = 'translate(-50%, -50%)';
         overlay.style.width = '';
         overlay.style.height = '';
-        overlay.style.willChange = '';
-        if (!REDUCED) {
-          overlay.style.transition = 'left 400ms cubic-bezier(0.23,1,0.32,1), top 400ms cubic-bezier(0.23,1,0.32,1), transform 400ms cubic-bezier(0.23,1,0.32,1)';
-          requestAnimationFrame(() => {
-            if (overlay) { overlay.style.transition = ''; }
-          });
-        }
       }
       break;
   }
