@@ -1,5 +1,9 @@
 import { tSync } from './i18n';
 console.log('[TM Content] loaded');
+// 坑：background 可能在同一页面重复注入本脚本（启动重试、导航重注入竞态）。
+// 这里刻意不用 window 标记拦截重复副本——扩展重载后旧标记会残留，把新副本误杀，
+// 导致该页字幕失效到手动刷新为止。正确策略是"后来者接管"：
+// create() 会按 DOM id 移除旧节点，消息处理全部幂等，多副本并存也只显示一层字幕。
 
 let overlay: HTMLDivElement | null = null;
 let prevEl: HTMLDivElement | null = null;
@@ -99,6 +103,8 @@ function create() {
   addLockButton();
   addDragListeners();
   applyLock();
+  // 兜底：清掉历史副本可能残留的同 id 节点（如扩展重载前的旧实例），防止视觉上叠加
+  document.getElementById('tmspeech-overlay')?.remove();
   document.body.appendChild(overlay);
 
   chrome.storage.local.get(STORAGE_KEY).then(stored => {

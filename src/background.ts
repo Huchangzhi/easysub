@@ -1,5 +1,10 @@
 import { t } from './i18n';
 const PENDING_KEY = 'pendingInit';
+// 坑：会话核心状态全是下面的 SW 内存全局变量，service worker 空闲约 30 秒即被杀、全部归零。
+// 不在 storage.session 里留一份跨重启快照的话，"SW 已死期间用户关掉了被捕获标签页"
+// 这一窗口期内触发的事件将无人能识别（onRemoved 冷启动后内存里 tabId 是 null）。
+// storage.session 随浏览器关闭自动清空、且对页面内容不可见，正适合放这类敏感运行态。
+const SESSION_KEY = 'runningSession';
 let captureTabId: number | null = null;
 let pipelineStatus = 'Stopped';
 let overlayLocked = false;
@@ -12,6 +17,16 @@ function sendToPopup(msg: any) {
 
 function sendToTab(tabId: number, msg: any) {
   chrome.tabs.sendMessage(tabId, msg).catch(() => {});
+}
+
+function persistSession() {
+  // 坑：会话快照的单一出口。所有改写 captureTabId/pipelineStatus 的地方都要同步调它，
+  // 否则 SW 冷启动后 onRemoved/RECONNECT 会读到过期快照（把已停会话当活的，或反之）。
+  if (pipelineStatus === 'Running' && captureTabId != null) {
+    chrome.storage.session.set({ [SESSION_KEY]: { tabId: captureTabId, status: pipelineStatus } }).catch(() => {});
+  } else {
+    chrome.storage.session.remove(SESSION_KEY).catch(() => {});
+  }
 }
 
 function appendTranscript(text: string) {
@@ -42,25 +57,41 @@ chrome.runtime.onConnect.addListener((port) => {
     }
     if (msg.type === 'FW_POP') {
       sendToPopup(msg.payload);
-      if (msg.payload?.type === 'STATUS_CHANGED') pipelineStatus = msg.payload.status;
+      if (msg.payload?.type === 'STATUS_CHANGED') { pipelineStatus = msg.payload.status; persistSession(); }
       if (msg.payload?.type === 'ERROR') cleanupAll();
       if (msg.payload?.type === 'SENTENCE_DONE') appendTranscript(msg.payload.text);
       if (msg.payload?.type === 'LOG') console.log('[TM BG]', msg.payload.message);
+      if (msg.payload?.type === 'REQUEST_STREAM') {
+        handleRequestStream(msg.payload.tabId);
+      }
       if (msg.payload?.type === 'RECONNECT') {
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         console.log('[TM BG] offscreen 重连, status=', msg.payload.status, 'tabId=', msg.payload.tabId);
         pipelineStatus = msg.payload.status;
         if (msg.payload.tabId && msg.payload.status === 'Running') {
-          captureTabId = msg.payload.tabId;
-          const id = captureTabId!;
-          sendToTab(id, { type: 'OVERLAY_TOGGLE', visible: true });
-          (async () => { sendToTab(id, { type: 'TEXT_CHANGED', text: await t('waiting') }); })();
-          chrome.storage.local.get('tmspeech_prefs').then(r => {
-            const prefs = (r['tmspeech_prefs'] as any) || {};
-            if (prefs.fontSize) sendToTab(id, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
-            sendToTab(id, { type: 'SET_PREV_OPTS', showPrev: prefs.showPrev !== false, prevOpacity: prefs.prevOpacity ?? 35 });
+          // 坑：RECONNECT 自愈绝不能无条件复活会话——offscreen 文档独立于 SW 存活，
+          // 它上报的标签页可能在 SW 死亡期间已被用户关闭；不校验存活的话，
+          // "关标签页自动停止"会被这条自愈路径原样绕过（复活后继续解码静音）。
+          const reviveTabId = msg.payload.tabId;
+          chrome.tabs.get(reviveTabId).then(() => {
+            captureTabId = reviveTabId;
+            const id = captureTabId!;
+            sendToTab(id, { type: 'OVERLAY_TOGGLE', visible: true });
+            (async () => { sendToTab(id, { type: 'TEXT_CHANGED', text: await t('waiting') }); })();
+            chrome.storage.local.get('tmspeech_prefs').then(r => {
+              const prefs = (r['tmspeech_prefs'] as any) || {};
+              if (prefs.fontSize) sendToTab(id, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
+              sendToTab(id, { type: 'SET_PREV_OPTS', showPrev: prefs.showPrev !== false, prevOpacity: prefs.prevOpacity ?? 35 });
+            });
+            sendToPopup({ type: 'STATUS_CHANGED', status: 'Running' });
+            persistSession();
+          }).catch(() => {
+            // 标签页已不存在：offscreen 还在空转解码静音，走统一清理把文档整个关掉。
+            // 此时本 SW 的 offscreenPort 多半为 null（冷启动），STOP_OFFSCREEN 发不出去，
+            // cleanupAll 里无条件执行的 closeDocument 是最后兜底，足以销毁文档终止一切循环。
+            console.log('[TM BG] 重连上报的标签页已关闭，清理残留会话');
+            cleanupAll();
           });
-          sendToPopup({ type: 'STATUS_CHANGED', status: 'Running' });
         }
       }
     }
@@ -82,6 +113,7 @@ chrome.runtime.onConnect.addListener((port) => {
         captureTabId = null;
       }
       chrome.storage.session.remove(PENDING_KEY);
+      persistSession();
       sendToPopup({ type: 'STATUS_CHANGED', status: 'Stopped' });
       sendToPopup({ type: 'ERROR', message: '后台页面意外关闭，识别已停止' });
     }, 3000);
@@ -95,6 +127,23 @@ async function checkPendingInit(port: chrome.runtime.Port) {
   if (stored[PENDING_KEY]) {
     port.postMessage(stored[PENDING_KEY]);
     chrome.storage.session.remove(PENDING_KEY);
+  }
+}
+
+// offscreen 模型就绪后回调：此刻才签发 capture streamId 并立即投递，把
+// "签发→消费"的时间窗压缩到毫秒级，根治 streamId 过期导致的 "Error starting tab capture"。
+async function handleRequestStream(tabId: number | null) {
+  try {
+    // 坑：本 SW 可能刚被这条消息唤醒、内存态全空，所以优先用 offscreen 随消息带来的
+    // tabId（它记的是 INIT 时的目标页），绝不能依赖 captureTabId/pipelineStatus 做守卫。
+    const target = tabId ?? captureTabId;
+    if (!target) throw new Error('没有可捕获的目标标签页');
+    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: target });
+    offscreenPort?.postMessage({ type: 'STREAM_READY', streamId });
+  } catch (e: any) {
+    console.log('[TM BG] 获取音频流失败:', e?.message || e);
+    sendToPopup({ type: 'ERROR', message: `获取音频流失败: ${e?.message || e}` });
+    cleanupAll();
   }
 }
 
@@ -116,23 +165,73 @@ function cleanupAll() {
   hideOverlay(tabId);
   chrome.storage.session.remove(PENDING_KEY);
   if (offscreenPort) offscreenPort.postMessage({ type: 'STOP_OFFSCREEN' });
+  // 坑：SW 冷启动场景下 offscreenPort 为 null，上面的 STOP_OFFSCREEN 根本发不出去；
+  // 但 closeDocument 是无条件执行的——offscreen 文档销毁后 AudioWorklet、60ms flush
+  // 定时器、pipeline 全部随之消亡，这是"停止"最终一定生效的硬保证。
+  // STOP_OFFSCREEN 只是端口还活着时的优雅停机快路径，二者缺一不可。
   chrome.offscreen.closeDocument().catch(() => {});
   offscreenPort = null;
   captureTabId = null;
   // 重试一次，防止 content script 未就绪
   if (tabId) setTimeout(() => hideOverlay(tabId), 300);
+  // 坑：closeDocument 销毁 offscreen 文档的同时会截断它经 port 回传状态的通道，
+  // 终态必须由 bg 在这里显式补发，否则已经打开的 popup 会永远停在 Running 界面。
+  // （手动停止时 popup 本地已自行置为 Stopped，重复收到同一终态是幂等的。）
+  persistSession();
+  sendToPopup({ type: 'STATUS_CHANGED', status: 'Stopped' });
+}
+
+// 坑：MV3 的事件监听器必须在模块顶层同步注册，放进异步回调里注册会错过事件。
+// 这个监听器是"关标签页自动停止"的唯一触发入口：此前项目没有任何代码感知标签页关闭，
+// 而 offscreen 内的 AudioWorklet + 60ms 自递归 flush 定时器是外部信号打不断的永动循环，
+// 唯一的打断方式就是这里触发的 cleanupAll()。
+chrome.tabs.onRemoved.addListener((closedTabId) => {
+  handleCapturedTabClosed(closedTabId);
+});
+
+async function handleCapturedTabClosed(closedTabId: number) {
+  let tabId = captureTabId;
+  let status = pipelineStatus;
+  // 坑：若本事件唤醒的是一个冷启动的 SW，内存全局变量全是初始值（null/'Stopped'），
+  // 不可信；回退读 storage.session 里持久化的会话快照再判断。
+  if (tabId == null || status !== 'Running') {
+    try {
+      const stored = await chrome.storage.session.get(SESSION_KEY);
+      const sess = stored[SESSION_KEY] as { tabId: number; status: string } | undefined;
+      if (sess) { tabId = sess.tabId; status = sess.status; }
+    } catch { /* storage 异常时退化为纯内存判断 */ }
+  }
+  // 关闭的是非捕获标签页 → no-op。整窗关闭/浏览器退出时每个标签页都会触发本事件，
+  // 第一轮清理后状态已是 Stopped，后续触发全部命中这里的早退，天然幂等。
+  if (status !== 'Running' || closedTabId !== tabId) return;
+  // 把恢复出的会话先同步回内存，再走与手动停止完全相同的统一清理路径。
+  captureTabId = tabId!;
+  pipelineStatus = status;
+  console.log('[TM BG] 被捕获标签页已关闭 (tabId=', closedTabId, ')，自动停止');
+  cleanupAll();
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'START_RECOGNITION') {
     (async () => {
-      // 确保前一次的 offscreen 文档完全关闭，释放 tab capture 流
+      // 坑：上一会话可能刚被"关标签页自动停止"清理，其 closeDocument 是异步生效的；
+      // 旧文档还没销毁完就创建新文档、申请新 capture 流会撞上释放竞态，典型表现就是
+      // offscreen 里 getUserMedia 报 "Error starting tab capture"。
+      // 同时清掉可能遗留的重连超时定时器，防止它把刚启动的新会话误判成断连而清场。
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       await chrome.offscreen.closeDocument().catch(() => {});
       // closeDocument 会触发 onDisconnect 置空 offscreenPort
+      // 等旧文档真正消失（上限 1.5s）再继续，给 Chrome 时间异步释放旧 capture 流
+      const releaseDeadline = Date.now() + 1500;
+      while (await chrome.offscreen.hasDocument()) {
+        if (Date.now() > releaseDeadline) break; // 极端情况下放行，让后续错误正常暴露
+        await new Promise(r => setTimeout(r, 50));
+      }
       chrome.storage.session.remove(PENDING_KEY);
 
       pipelineStatus = 'Running';
       captureTabId = msg.tabId || null;
+      persistSession();
       if (captureTabId && msg.overlayVisible) {
         const alreadyInjected = await isContentScriptInjected(captureTabId);
         if (!alreadyInjected) {
@@ -149,17 +248,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         });
       }
 
-      let streamId: string | undefined;
-      if (msg.tabId) {
-        streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId });
-      }
-
+      // 坑：不要在这里预先签发 capture streamId！它的有效期很短，而 offscreen 冷启动
+      // 加载 WASM 模型可能耗时远超这个窗口，等模型就绪再用早已过期的 id 去
+      // getUserMedia，就会报 "Error starting tab capture"。改为由 offscreen 在模型
+      // 就绪后发 REQUEST_STREAM，这里即时签发、立即消费。
       await ensureOffscreen();
 
       const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
       const punctPref = (await chrome.storage.local.get('tmspeech_use_punct'))['tmspeech_use_punct'];
       const prefs = ((await chrome.storage.local.get('tmspeech_prefs'))['tmspeech_prefs'] as any) || {};
-      const initMsg: any = { type: 'INIT_OFFSCREEN', streamId, tabId: msg.tabId, lang, usePunct: punctPref !== false };
+      const initMsg: any = { type: 'INIT_OFFSCREEN', tabId: msg.tabId, lang, usePunct: punctPref !== false };
       if (prefs.endpointRule1) initMsg.endpointRule1 = prefs.endpointRule1;
       if (prefs.endpointRule2) initMsg.endpointRule2 = prefs.endpointRule2;
       if (prefs.endpointRule3) initMsg.endpointRule3 = prefs.endpointRule3;
@@ -245,20 +343,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'FORWARD_TO_POPUP') {
     sendToPopup(msg.payload);
-    if (msg.payload?.type === 'STATUS_CHANGED') pipelineStatus = msg.payload.status;
+    if (msg.payload?.type === 'STATUS_CHANGED') { pipelineStatus = msg.payload.status; persistSession(); }
   }
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (tabId !== captureTabId || changeInfo.status !== 'complete' || pipelineStatus !== 'Running') return;
-  setTimeout(() => {
-    chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] }).then(() => {
-      sendToTab(tabId, { type: 'OVERLAY_TOGGLE', visible: true });
-      chrome.storage.local.get('tmspeech_prefs').then(r => {
-        const prefs = (r['tmspeech_prefs'] as any) || {};
-        if (prefs.fontSize) sendToTab(tabId, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
-      });
-      if (offscreenPort) offscreenPort.postMessage({ type: 'RESEND_CURRENT_TEXT' });
-    }).catch(() => {});
+  setTimeout(async () => {
+    // 坑：executeScript 每次都会注入一份全新的 content.js 副本，而每份副本都会创建
+    // 自己的字幕层——不加探测就直接注入，导航几次就叠几层悬浮字幕。先 PING 再注入。
+    const already = await isContentScriptInjected(tabId);
+    if (!already) {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] }).catch(() => {});
+    }
+    sendToTab(tabId, { type: 'OVERLAY_TOGGLE', visible: true });
+    chrome.storage.local.get('tmspeech_prefs').then(r => {
+      const prefs = (r['tmspeech_prefs'] as any) || {};
+      if (prefs.fontSize) sendToTab(tabId, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
+    });
+    if (offscreenPort) offscreenPort.postMessage({ type: 'RESEND_CURRENT_TEXT' });
   }, 300);
 });

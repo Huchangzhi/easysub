@@ -42,11 +42,22 @@ function stopAudio() {
 }
 
 async function startAudioCapture(streamId: string) {
-  const stream: MediaStream = await (navigator.mediaDevices.getUserMedia as any)({
+  const constraints: any = {
     audio: {
       mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId },
     },
-  });
+  };
+  // 坑："Error starting tab capture" 常见于上一次捕获刚被销毁就立刻开新流——
+  // Chrome 侧旧流的释放是异步的，立即申请会被拒绝。失败后稍等重试一次；
+  // 仍失败则照常抛出，由 INIT 的异常通道把错误上报到弹窗。
+  let stream: MediaStream;
+  try {
+    stream = await (navigator.mediaDevices.getUserMedia as any)(constraints);
+  } catch (e) {
+    log('tab capture 启动失败，400ms 后重试一次: ' + e);
+    await new Promise(r => setTimeout(r, 400));
+    stream = await (navigator.mediaDevices.getUserMedia as any)(constraints);
+  }
   captureStream = stream;
   audioEl = document.createElement('audio');
   audioEl.srcObject = stream;
@@ -216,7 +227,10 @@ function setupPort() {
         sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: waitingText });
         sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: waitingText });
         await pipeline!.start();
-        await startAudioCapture(msg.streamId);
+        // 坑：capture streamId 有效期很短，必须在消费前一刻才签发。此刻 WASM/模型已就绪，
+        // 向 background 要一个全新的 streamId 并立即开流。旧实现"启动时预签发、
+        // 模型加载完才消费"，时间窗一长就报 "Error starting tab capture"。
+        sendSafe('FW_POP', { type: 'REQUEST_STREAM', tabId: msg.tabId });
         } catch (e: any) { log('INIT_OFFSCREEN async 异常: ' + (e?.stack || e)); throw e; }
       })().catch((e) => {
         log('Pipeline start 异常: ' + (e.message || e));
@@ -239,6 +253,19 @@ function setupPort() {
 
     if (msg.type === 'SET_ENDPOINT') {
       log(`端点阈值 saved: ${msg.rule1}/${msg.rule2}/${msg.rule3} (重启生效)`);
+    }
+
+    if (msg.type === 'STREAM_READY') {
+      // background 对 REQUEST_STREAM 的应答：拿到新鲜 streamId，立即开流。
+      if (!pipeline) { log('STREAM_READY 到达时会话已停止，丢弃'); return; }
+      log('收到 STREAM_READY，开始音频捕获');
+      reconnectStreamId = msg.streamId || null;
+      (async () => {
+        await startAudioCapture(msg.streamId);
+      })().catch((e: any) => {
+        log('音频捕获失败: ' + (e?.message || e));
+        sendSafe('FW_POP', { type: 'ERROR', message: `${e?.message || e}` });
+      });
     }
 
     if (msg.type === 'STOP_OFFSCREEN') {
