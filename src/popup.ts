@@ -27,6 +27,13 @@ const btnResetOverlay = $('btnResetOverlay') as HTMLButtonElement;
 const btnCopy = $('btnCopy') as HTMLButtonElement;
 const btnClear = $('btnClear') as HTMLButtonElement;
 const transcriptBox = $('transcriptBox');
+// —— 历史检索 ——
+const searchInput = $('searchInput') as HTMLInputElement;
+const searchCount = $('searchCount');
+const btnSearchClear = $('btnSearchClear') as HTMLButtonElement;
+// —— 新功能开关 ——
+const chkLookback = $('chkLookback') as HTMLInputElement;
+const chkLatency = $('chkLatency') as HTMLInputElement;
 
 let locked = false;
 let lastStatus = 'Stopped';
@@ -75,6 +82,12 @@ async function applyLang() {
   $('secPrev').textContent = tr('secPrev');
   $('secPunct').textContent = tr('secPunct');
   $('resetEndpointLabel').textContent = tr('resetEndpoint');
+  // —— 历史检索 + 新功能开关（文案随语言切换实时刷新）——
+  searchInput.setAttribute('placeholder', tr('searchPlaceholder'));
+  $('showLookback').textContent = tr('showLookback');
+  $('helpTipLookback').textContent = tr('helpLookback');
+  $('showLatency').textContent = tr('showLatency');
+  $('helpTipLatency').textContent = tr('helpLatency');
   btnLang.textContent = tr('langSwitch');
   updateLockUI();
   renderTranscript();
@@ -88,6 +101,10 @@ async function loadPrefs() {
     fontSizeLabel.textContent = String(prefs.fontSize);
   }
   chkShowPrev.checked = prefs.showPrev !== false;
+  // 新功能开关默认开（!== false），与 savePrefs 的合并语义配合：
+  // 老用户 storage 里没有这两个键，首次打开即为默认开启
+  chkLookback.checked = prefs.lookbackEnabled !== false;
+  chkLatency.checked = prefs.latencyIndicatorEnabled !== false;
   // 坑：字幕开关必须从 prefs 恢复——此前勾选态永远回到 HTML 默认 checked，
   // 与上次会话的真实可见性脱节（START 时才把当次值带上，用户上次的选择丢失）。
   // 键名 overlayVisible 与 START 消息的 msg.overlayVisible 对齐；默认开（!== false）。
@@ -206,11 +223,58 @@ function renderTranscript() {
     transcriptBox.innerHTML = `<div class="transcript-empty" id="transcriptEmpty">${tSync(currentLang, 'transcriptEmpty')}</div>`;
     return;
   }
-  transcriptBox.innerHTML = transcriptEntries.map(t =>
-    `<div class="transcript-entry">${escapeHtml(t)}</div>`
+  const q = searchInput.value.trim().toLowerCase();
+  if (!q) {
+    // 无搜索词：原样全量渲染（清空搜索框后 DOM 完全复原走这里）
+    transcriptBox.innerHTML = transcriptEntries.map(t =>
+      `<div class="transcript-entry">${escapeHtml(t)}</div>`
+    ).join('');
+    transcriptBox.scrollTop = transcriptBox.scrollHeight;
+    return;
+  }
+  // 搜索态：纯内存过滤（数组 ≤1000 条），input 直接重渲，无防抖/无新常驻开销
+  const hits = transcriptEntries.filter(t => t.toLowerCase().includes(q));
+  if (hits.length === 0) {
+    transcriptBox.innerHTML = `<div class="transcript-empty">${tSync(currentLang, 'searchNoMatch')}</div>`;
+    return;
+  }
+  transcriptBox.innerHTML = hits.map(t =>
+    `<div class="transcript-entry">${highlightEntry(t, q)}</div>`
   ).join('');
-  transcriptBox.scrollTop = transcriptBox.scrollHeight;
 }
+
+// 坑：高亮必须"按原文切分、逐段转义后再拼 <mark>"——若先整体 escapeHtml 再替换
+// 原始查询词，查询含 &/</> 时会与已转义实体错位，产生错误高亮甚至注入点
+function highlightEntry(text: string, q: string): string {
+  let out = '';
+  let last = 0;
+  const lower = text.toLowerCase();
+  while (true) {
+    const i = lower.indexOf(q, last);
+    if (i < 0) break;
+    out += escapeHtml(text.slice(last, i)) + '<mark>' + escapeHtml(text.slice(i, i + q.length)) + '</mark>';
+    last = i + q.length;
+  }
+  return out + escapeHtml(text.slice(last));
+}
+
+// —— 搜索框交互：仅 input 事件触发重渲；命中计数只在有搜索词时显示 ——
+searchInput.oninput = () => {
+  btnSearchClear.style.display = searchInput.value ? 'flex' : 'none';
+  renderTranscript();
+  const q = searchInput.value.trim().toLowerCase();
+  if (!q) { searchCount.textContent = ''; return; }
+  const n = transcriptEntries.filter(t => t.toLowerCase().includes(q)).length;
+  searchCount.textContent = tSync(currentLang, 'searchHits').replace('{n}', String(n));
+};
+
+btnSearchClear.onclick = () => {
+  searchInput.value = '';
+  searchCount.textContent = '';
+  btnSearchClear.style.display = 'none';
+  renderTranscript();
+  searchInput.focus();
+};
 
 btnCopy.onclick = async () => {
   const text = transcriptEntries.join('\n');
@@ -225,6 +289,10 @@ btnCopy.onclick = async () => {
 btnClear.onclick = () => {
   transcriptEntries = [];
   chrome.storage.local.remove(TRANSCRIPT_KEY);
+  // 清空记录时一并复位搜索框——否则残留的搜索词让空态显示成"没有匹配的字幕"，误导用户
+  searchInput.value = '';
+  searchCount.textContent = '';
+  btnSearchClear.style.display = 'none';
   renderTranscript();
 };
 
@@ -268,6 +336,25 @@ fontSizeSlider.oninput = () => {
   const size = parseInt(fontSizeSlider.value);
   chrome.runtime.sendMessage({ type: 'SET_FONT_SIZE', fontSize: size }).catch(() => {});
   savePrefs({ fontSize: size });
+};
+
+// 坑：bg 的 FORWARD_TO_CONTENT 处理器只转发 msg.payload 给 content，
+// PREFS_PATCH 必须整体放进 payload；字段名是 popup↔content 的显示契约
+// （content 端由 auditor-ui 并行实现），勿改键名，否则运行中切换静默失效
+chkLookback.onchange = () => {
+  savePrefs({ lookbackEnabled: chkLookback.checked });
+  chrome.runtime.sendMessage({
+    type: 'FORWARD_TO_CONTENT',
+    payload: { type: 'PREFS_PATCH', lookbackEnabled: chkLookback.checked },
+  }).catch(() => {});
+};
+
+chkLatency.onchange = () => {
+  savePrefs({ latencyIndicatorEnabled: chkLatency.checked });
+  chrome.runtime.sendMessage({
+    type: 'FORWARD_TO_CONTENT',
+    payload: { type: 'PREFS_PATCH', latencyIndicatorEnabled: chkLatency.checked },
+  }).catch(() => {});
 };
 
 chrome.runtime.onMessage.addListener((msg) => {

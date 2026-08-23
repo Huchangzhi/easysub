@@ -49,6 +49,15 @@ const strings: Record<string, Record<string, string>> = {
     helpEndpoint1: '说话人停下、尾部静音达到该秒数时结束当前句。调小断句更快但句子偏碎；调大句子更完整，字幕定稿稍晚。',
     helpEndpoint2: '连续讲话中的短停顿达到该秒数时也会尝试断句，用于切分长段语流。调小更容易在短停顿处切句，调大减少误切但单句可能偏长。',
     helpEndpoint3: '无论是否检测到停顿，当前句累计到该时长就强制结束，避免单条字幕过长难以阅读。',
+    // —— 历史检索 + 新功能开关 ——
+    searchPlaceholder: '搜索历史字幕…',
+    searchNoMatch: '没有匹配的字幕',
+    // 坑：{n} 是占位符不是模板语法，使用方必须手动 .replace('{n}', String(n))
+    searchHits: '{n} 条命中',
+    showLookback: '近句回看',
+    helpLookback: '在字幕叠层中保留最近几句已完成的内容供回看。仅用定容内存缓冲保存文本，无定时器、无轮询，零常驻开销。',
+    showLatency: '延迟指示',
+    helpLatency: '在字幕叠层右下角显示当前识别延迟（如 1.2s）。约每 2 秒更新一次文本，开销可忽略；不需要时可关闭以保持画面纯净。',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -97,6 +106,13 @@ const strings: Record<string, Record<string, string>> = {
     helpEndpoint1: 'Ends the current sentence once trailing silence reaches this many seconds. Lower values split sooner into shorter lines; higher values keep sentences complete but finalize subtitles later.',
     helpEndpoint2: 'Also tries to break at short pauses during continuous speech to split long passages. Lower it to cut more eagerly at brief pauses; raise it to reduce false breaks, at the cost of longer sentences.',
     helpEndpoint3: 'Force-finishes the sentence when it reaches this duration even without a detected pause, so no single subtitle line gets too long to read.',
+    searchPlaceholder: 'Search transcript…',
+    searchNoMatch: 'No matching subtitles',
+    searchHits: '{n} hit(s)',
+    showLookback: 'Lookback',
+    helpLookback: 'Keeps the last few finished sentences visible in the subtitle overlay for review. Uses a fixed-capacity in-memory buffer only — no timers, no polling, zero standing cost.',
+    showLatency: 'Latency',
+    helpLatency: 'Shows the current recognition latency (e.g. 1.2s) at the bottom-right of the subtitle overlay. Updates about once every 2 seconds — negligible cost; turn off for a cleaner picture.',
   },
 };
 

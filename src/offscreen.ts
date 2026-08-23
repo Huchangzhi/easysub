@@ -17,6 +17,32 @@ let lastPunctText = '';
 // 回调触发时发现代次已变就整体丢弃（不写缓存不发消息），防止上一场字幕串进新会话、
 // 或停止后字幕被迟到的标点结果"复活"。
 let punctEpoch = 0;
+
+// ---- 识别延迟测量（LATENCY_UPDATE 测量端）----
+// 指标口径：latEmaMs = 「flush 往返延迟 RTT + 本块同步处理耗时」的指数滑动平均（α=0.2）。
+// - RTT：flush 指令发出（主线程）→ worklet 回包到达（主线程）。worklet 侧拼缓冲极快，
+//   RTT 主要反映主线程被标点推理等任务阻塞造成的音频消费滞后；
+// - 处理耗时：本次 feedAudio（重采样 + 识别解码循环）的同步耗时，识别器积压时上升。
+// 局限：不含识别器内部流式缓冲与端点检测的固有等待（如尾静音 0.8s 停顿），所以这是
+// "处理链路延迟"的近似，不是严格的音频→字幕端到端时延；数值小仅代表管线未积压。
+// 开销：每 60ms 周期只有几次数字运算和一次 EMA 更新——不分配对象、不新增定时器，
+// 完全复用现有 flush 路径的时间戳。
+let latEmaMs = 0;
+let lastFlushSentAt = 0;
+let lastLatencySentAt = 0;
+
+function recordLatency(rttMs: number, procMs: number) {
+  const sample = rttMs + procMs;
+  latEmaMs = latEmaMs === 0 ? sample : latEmaMs * 0.8 + sample * 0.2;
+  // 节流坑：≥2 秒最多一条。先查节流窗口再决定是否发，避免每 60ms 都做消息序列化；
+  // 用 Date.now() 记录上次发送时刻（墙钟），与 performance.now() 的用途区分开。
+  if (Date.now() - lastLatencySentAt < 2000) return;
+  // 仅 pipeline Running 时发送；STOP/INIT 后 pipeline 置 null 或非 Running，自然停发，
+  // 显示端在停止语义下自行清空残留读数（本端不发"清零"消息）。
+  if (!pipeline || pipeline.getStatus() !== JobStatus.Running) return;
+  lastLatencySentAt = Date.now();
+  sendSafe('FW_CT', { type: 'LATENCY_UPDATE', ms: Math.round(latEmaMs) });
+}
 let audioCtx: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let audioEl: HTMLAudioElement | null = null;
@@ -94,13 +120,21 @@ async function startWorkletCapture(stream: MediaStream) {
       const buf = new Float32Array(e.data.audio);
       if (buf.length > 0) {
         const sr = e.data.sampleRate || audioCtx!.sampleRate;
+        const arrivedAt = performance.now();
         pipeline?.feedAudio(sr === 16000 ? buf : resample(buf, sr, 16000));
+        // 延迟测量：RTT 按"回包到达时刻 - flush 发出时刻"计（不含本块解码耗时，
+        // 解码单独计入处理耗时），口径详见 recordLatency 注释。
+        recordLatency(lastFlushSentAt > 0 ? Math.max(0, arrivedAt - lastFlushSentAt) : 0,
+          performance.now() - arrivedAt);
       }
     }
   };
 
   function scheduleFlush() {
     flushTimer = setTimeout(() => {
+      // 记录 flush 发出时刻供延迟测量使用（复用现有 60ms 路径，不新增定时器）。
+      // 若上一轮回包因主线程阻塞迟到，此值被覆盖后 RTT 按最新发送计时——低估近似，可接受。
+      lastFlushSentAt = performance.now();
       workletNode?.port.postMessage('flush');
       scheduleFlush();
     }, 60);
@@ -120,7 +154,10 @@ function startFallbackCapture(stream: MediaStream) {
   const node = ctx.createScriptProcessor(16384, 1, 1);
   node.onaudioprocess = (e) => {
     const buf = new Float32Array(e.inputBuffer.getChannelData(0));
+    const t0 = performance.now();
     pipeline?.feedAudio(ctx.sampleRate === 16000 ? buf : resample(buf, ctx.sampleRate, 16000));
+    // 降级路径没有 flush RTT 可测，只用同步处理耗时近似（口径见 recordLatency 注释）。
+    recordLatency(0, performance.now() - t0);
   };
   source.connect(node);
   // 坑：ScriptProcessorNode 只有被下游拉取（连接到 destination 一侧）时才会驱动，
@@ -175,6 +212,10 @@ function setupPort() {
       lastPunctText = '';
       punctPending = false;
       punctEpoch++;
+      // 延迟测量状态一并归零：新会话从零开始积累 EMA，避免上一场的积压读数串场。
+      latEmaMs = 0;
+      lastFlushSentAt = 0;
+      lastLatencySentAt = 0;
 
       pipeline = new Pipeline({
         onTextChanged: (text) => {

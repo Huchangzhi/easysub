@@ -6,5 +6,12 @@
   "helpPrev": { "message": "Shows the previous finished sentence on screen so you can glance back at what was just said. Lower opacity makes that line fainter and less obtrusive." },
   "helpEndpoint1": { "message": "Ends the current sentence once trailing silence reaches this many seconds. Lower values split sooner into shorter lines; higher values keep sentences complete but finalize subtitles later." },
   "helpEndpoint2": { "message": "Also tries to break at short pauses during continuous speech to split long passages. Lower it to cut more eagerly at brief pauses; raise it to reduce false breaks, at the cost of longer sentences." },
-  "helpEndpoint3": { "message": "Force-finishes the sentence when it reaches this duration even without a detected pause, so no single subtitle line gets too long to read." }
+  "helpEndpoint3": { "message": "Force-finishes the sentence when it reaches this duration even without a detected pause, so no single subtitle line gets too long to read." },
+  "searchPlaceholder": { "message": "Search transcript…" },
+  "searchNoMatch": { "message": "No matching subtitles" },
+  "searchHits": { "message": "{n} hit(s)" },
+  "showLookback": { "message": "Lookback" },
+  "helpLookback": { "message": "Keeps the last few finished sentences visible in the subtitle overlay for review. Uses a fixed-capacity in-memory buffer only — no timers, no polling, zero standing cost." },
+  "showLatency": { "message": "Latency" },
+  "helpLatency": { "message": "Shows the current recognition latency (e.g. 1.2s) at the bottom-right of the subtitle overlay. Updates about once every 2 seconds — negligible cost; turn off for a cleaner picture." }
 }

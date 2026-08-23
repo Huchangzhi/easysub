@@ -235,6 +235,38 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 .transcript-entry { padding: 6px 0; color: var(--text); }
 .transcript-entry + .transcript-entry { border-top: 1px solid var(--border); }
 .transcript-empty { color: var(--text2); font-style: italic; font-size: 11px; }
+
+/* Transcript search */
+/* 坑：清空按钮默认 display:none，由 JS 按"输入框是否有内容"切 display——
+   纯 CSS 方案（如 :placeholder-shown）无法同时兼顾自定义清除图标与命中计数联动 */
+.search-wrap {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface);
+  transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out);
+}
+.search-wrap:focus-within { border-color: rgba(255,255,255,0.15); background: var(--surface-hover); }
+.search-wrap svg.search-icon { width: 13px; height: 13px; color: var(--text2); flex-shrink: 0; pointer-events: none; }
+#searchInput {
+  flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+  color: var(--text); font: 400 12px/1.4 system-ui, sans-serif;
+}
+#searchInput::placeholder { color: var(--text2); }
+.search-count { font-size: 10px; color: var(--text2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.search-clear {
+  display: none; align-items: center; justify-content: center;
+  width: 16px; height: 16px; padding: 0; flex-shrink: 0;
+  border: none; border-radius: 50%; background: transparent; color: var(--text2);
+  cursor: pointer; transition: color 150ms var(--ease-out), background 150ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.search-clear:hover { color: var(--text); background: var(--surface-hover); }
+.search-clear:active { transform: scale(0.9); }
+.search-clear svg { width: 10px; height: 10px; pointer-events: none; }
+.transcript-entry mark {
+  /* 坑：mark 默认黄底黑字，在深色主题下刺眼；用 accent 半透明底+继承文字色做高亮 */
+  background: rgba(94, 158, 255, 0.35); color: inherit;
+  border-radius: 3px; padding: 0 1px;
+}
 .disclaimer { font-size: 10px; color: var(--text2); text-align: center; line-height: 1.3; }
 @keyframes sentenceIn {
   from { opacity: 0; transform: translateY(4px); }
@@ -312,6 +344,16 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
       <input type="range" id="fontSizeSlider" min="18" max="72" value="36">
       <span class="slider-value" id="fontSizeLabel">36</span>
     </div>
+    <div class="row">
+      <input type="checkbox" id="chkLatency" checked>
+      <label for="chkLatency" id="showLatency">延迟指示</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnLatency" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipLatency">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipLatency">在字幕叠层右下角显示当前识别延迟（如 1.2s）。约每 2 秒更新一次文本，开销可忽略；不需要时可关闭以保持画面纯净。</span>
+      </span>
+    </div>
   </div>
 
   <div class="divider"></div>
@@ -331,6 +373,16 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
         <span class="slider-label" id="prevOpacity">透明度</span>
         <input type="range" id="prevOpacitySlider" min="5" max="100" value="35">
         <span class="slider-value" id="prevOpacityLabel">35</span>
+      </span>
+    </div>
+    <div class="row">
+      <input type="checkbox" id="chkLookback" checked>
+      <label for="chkLookback" id="showLookback">近句回看</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnLookback" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipLookback">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipLookback">在字幕叠层中保留最近几句已完成的内容供回看。仅用定容内存缓冲保存文本，无定时器、无轮询，零常驻开销。</span>
       </span>
     </div>
   </div>
@@ -412,6 +464,14 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 
   <div class="section" id="transcriptSection">
     <span class="section-label" id="transcriptLabel">字幕记录</span>
+    <div class="search-wrap">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="searchInput" placeholder="搜索历史字幕…" autocomplete="off" spellcheck="false" aria-label="搜索历史字幕">
+      <span class="search-count" id="searchCount"></span>
+      <button type="button" id="btnSearchClear" class="search-clear" aria-label="清除搜索">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
     <div class="transcript-box" id="transcriptBox">
       <div class="transcript-empty" id="transcriptEmpty">暂无字幕</div>
     </div>

@@ -6,5 +6,12 @@
   "helpPrev": { "message": "在画面上额外显示上一条已完成的句子，方便回看刚说过的内容；透明度越低上一句越淡，越不遮挡画面。" },
   "helpEndpoint1": { "message": "说话人停下、尾部静音达到该秒数时结束当前句。调小断句更快但句子偏碎；调大句子更完整，字幕定稿稍晚。" },
   "helpEndpoint2": { "message": "连续讲话中的短停顿达到该秒数时也会尝试断句，用于切分长段语流。调小更容易在短停顿处切句，调大减少误切但单句可能偏长。" },
-  "helpEndpoint3": { "message": "无论是否检测到停顿，当前句累计到该时长就强制结束，避免单条字幕过长难以阅读。" }
+  "helpEndpoint3": { "message": "无论是否检测到停顿，当前句累计到该时长就强制结束，避免单条字幕过长难以阅读。" },
+  "searchPlaceholder": { "message": "搜索历史字幕…" },
+  "searchNoMatch": { "message": "没有匹配的字幕" },
+  "searchHits": { "message": "{n} 条命中" },
+  "showLookback": { "message": "近句回看" },
+  "helpLookback": { "message": "在字幕叠层中保留最近几句已完成的内容供回看。仅用定容内存缓冲保存文本，无定时器、无轮询，零常驻开销。" },
+  "showLatency": { "message": "延迟指示" },
+  "helpLatency": { "message": "在字幕叠层右下角显示当前识别延迟（如 1.2s）。约每 2 秒更新一次文本，开销可忽略；不需要时可关闭以保持画面纯净。" }
 }
