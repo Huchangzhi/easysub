@@ -92,6 +92,8 @@ p { font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 24px; line-hei
     <span id="permissionBtnText">授权麦克风</span>
   </button>
 </div>
-<script src="permission.js"></script>
+<!-- 坑：不能手写 <script src="permission.js">——HtmlWebpackPlugin 默认 inject:true 已自动
+     注入（见 webpack.config.js），手写会让 permission.js 执行两遍（applyLang 等初始化重复跑）。
+     加载途径以插件注入为唯一来源。 -->
 </body>
 </html>

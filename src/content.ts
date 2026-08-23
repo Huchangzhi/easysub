@@ -146,7 +146,10 @@ function addDragListeners() {
   if (!overlay) return;
 
   overlay.onpointerdown = (e) => {
-    if (_locked || e.target === lockBtn) return;
+    // 坑：必须用 contains 判定——按钮内部是 SVG 图标，点在图标上时 e.target 是 <svg>/<path>
+    // 而非 lockBtn 本身；若漏判会启动拖拽并对 overlay setPointerCapture，
+    // 指针被捕获后 click 落不到按钮上，锁定切换在"点图标正中"这一最常见操作下失效。
+    if (_locked || (lockBtn && e.target instanceof Node && lockBtn.contains(e.target))) return;
     const rect = overlay!.getBoundingClientRect();
     dragState = {
       baseLeft: rect.left,
@@ -213,6 +216,11 @@ function toggleLock() {
 
 function applyLock() {
   if (!overlay || !lockBtn) return;
+  // 坑：下面两分支的视觉属性必须成对设置——backdropFilter 与 -webkit-backdropFilter、
+  // background/boxShadow/border/pointerEvents 都要同时置 none(或恢复) ，单边残留会造成
+  // "已锁定但仍见半透明背景/毛玻璃"的错乱观感（-webkit- 前缀属性不随标准属性联动）。
+  // 锁态值本身以 storage.local['tmspeech_locked'] 为唯一事实源（bg 会补发 LOCK_TOGGLE），
+  // 本函数只负责把 _locked 渲染到 DOM。
   if (_locked) {
     overlay.style.pointerEvents = 'none';
     lockBtn.style.pointerEvents = 'auto';

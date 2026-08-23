@@ -29,6 +29,7 @@ const btnClear = $('btnClear') as HTMLButtonElement;
 const transcriptBox = $('transcriptBox');
 
 let locked = false;
+let lastStatus = 'Stopped';
 let currentLang = 'zh_CN';
 let transcriptEntries: string[] = [];
 const PREFS_KEY = 'tmspeech_prefs';
@@ -57,7 +58,14 @@ async function applyLang() {
   $('disclaimer').textContent = tr('disclaimer');
   $('resetOverlayLabel').textContent = tr('resetPosition');
   $('showPunct').textContent = tr('showPunct');
-  $('punctNote').textContent = tr('punctNote');
+  // 坑：punctNote 小字注释已升级为 ? 帮助气泡，原元素与赋值一并移除；
+  // 帮助文案必须在 applyLang 内刷新，否则语言切换后气泡仍显示旧语言
+  $('helpTipPunct').textContent = tr('helpPunct');
+  $('helpTipPrev').textContent = tr('helpPrev');
+  $('helpTipEndpoint1').textContent = tr('helpEndpoint1');
+  $('helpTipEndpoint2').textContent = tr('helpEndpoint2');
+  $('helpTipEndpoint3').textContent = tr('helpEndpoint3');
+  document.querySelectorAll<HTMLElement>('.help-btn').forEach(b => b.setAttribute('aria-label', tr('helpHint')));
   $('showPrev').textContent = tr('showPrev');
   $('prevOpacity').textContent = tr('prevOpacity');
   $('endpointLabel1').textContent = tr('endpointRule1');
@@ -80,6 +88,10 @@ async function loadPrefs() {
     fontSizeLabel.textContent = String(prefs.fontSize);
   }
   chkShowPrev.checked = prefs.showPrev !== false;
+  // 坑：字幕开关必须从 prefs 恢复——此前勾选态永远回到 HTML 默认 checked，
+  // 与上次会话的真实可见性脱节（START 时才把当次值带上，用户上次的选择丢失）。
+  // 键名 overlayVisible 与 START 消息的 msg.overlayVisible 对齐；默认开（!== false）。
+  chkOverlay.checked = prefs.overlayVisible !== false;
   const po = prefs.prevOpacity ?? 35;
   prevOpacitySlider.value = String(po);
   prevOpacityLabel.textContent = String(po);
@@ -105,6 +117,8 @@ function setStatus(status: string) {
   statusDot.className = 'status-dot ' + status;
   btnStart.disabled = status === 'Running';
   btnStop.disabled = status === 'Stopped';
+  // 记录当前会话态，供 chkOverlay 切换时判断"是否处于运行中"以给出对应反馈
+  lastStatus = status;
 }
 
 function log(msg: string) {
@@ -139,7 +153,20 @@ btnStop.onclick = () => {
 };
 
 chkOverlay.onchange = () => {
-  chrome.runtime.sendMessage({ type: 'OVERLAY_TOGGLE', visible: chkOverlay.checked }).catch(() => {});
+  const visible = chkOverlay.checked;
+  // 坑：无论会话是否运行都要持久化——此前只在 bg 有 captureTabId 时才转发生效，
+  // 未启动会话时切换是静默无效的，且重开 popup 后勾选态丢失。
+  // 写入 tmspeech_prefs.overlayVisible 后，下次 START 时随 msg.overlayVisible 生效。
+  savePrefs({ overlayVisible: visible });
+  chrome.runtime.sendMessage({ type: 'OVERLAY_TOGGLE', visible }).catch(() => {});
+  // 可见反馈：运行中切换由 OVERLAY_TOGGLE 链路即时生效，无需提示；
+  // 未启动会话时明确告知"已保存、下次开始识别时生效"，不再静默。
+  // 注：反馈文案暂内联双语（改动范围不含 i18n.ts，待后续补词条）。
+  if (lastStatus !== 'Running') {
+    log(currentLang === 'zh_CN'
+      ? '当前无进行中的识别，设置已保存，下次开始时生效'
+      : 'No active session — saved, applies on next start');
+  }
 };
 
 chkPunct.onchange = () => {
@@ -286,6 +313,8 @@ applyLang();
 chrome.storage.local.get('tmspeech_use_punct').then(r => {
   chkPunct.checked = r['tmspeech_use_punct'] !== false;
 });
+// 坑：GET_STATUS 的 locked 现由 bg 异步回源 storage 后 sendResponse（处理器 return true），
+// promise 仍会正常 resolve，但响应晚于同步分支——此处不得假设响应同步可达。
 chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((resp: any) => {
   if (resp?.status) setStatus(resp.status);
   if (resp?.locked !== undefined) { locked = resp.locked; updateLockUI(); }

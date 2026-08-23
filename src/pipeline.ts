@@ -37,8 +37,24 @@ export class Pipeline {
 
     this.status = JobStatus.Running;
     this.cancelled = false;
-    // ponytail: createStream 无 try/catch，失败则潜入 Running 但 stream 为 null
-    this.stream = r.createStream();
+    // 坑：createStream 在 WASM 内存紧张/句柄创建失败时可能抛异常或返回无效句柄。
+    // 若不加保护：status 已置 Running 但 stream 为 null——start() 因开头幂等短路
+    // 永远无法重启，feedAudio 因守卫静默丢弃全部音频，形成无法自恢复的"假 Running"。
+    // 修复：失败时回滚 status=Stopped 并向上抛出，由 offscreen 的 async INIT 链路
+    // catch 后走 ERROR 通道上报（offscreen.ts 对 pipeline!.start() 已有 try/catch 包裹）；
+    // 同时校验返回的流及其内部句柄真值，防止后续 wasm 调用在句柄 0 上直接 abort。
+    try {
+      this.stream = r.createStream();
+    } catch (e) {
+      this.status = JobStatus.Stopped;
+      this.stream = null;
+      throw e instanceof Error ? e : new Error('识别流创建失败: ' + String(e));
+    }
+    if (!this.stream || !this.stream.handle) {
+      this.status = JobStatus.Stopped;
+      this.stream = null;
+      throw new Error('识别流创建失败：返回无效句柄');
+    }
     this.events.onStatusChanged(JobStatus.Running);
     log('识别流已创建');
   }

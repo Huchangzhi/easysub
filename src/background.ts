@@ -5,11 +5,22 @@ const PENDING_KEY = 'pendingInit';
 // 这一窗口期内触发的事件将无人能识别（onRemoved 冷启动后内存里 tabId 是 null）。
 // storage.session 随浏览器关闭自动清空、且对页面内容不可见，正适合放这类敏感运行态。
 const SESSION_KEY = 'runningSession';
+// 坑：锁态的唯一事实源是 storage.local['tmspeech_locked']；下面的 overlayLocked 只是
+// 本 SW 生命周期的内存缓存。SW 空闲约 30s 被杀后缓存归零，若任何路径只读缓存不回源
+// storage，就会出现"三端锁态发散"（popup 说没锁 / 字幕层实际锁着 / 新建层按未锁绘制）。
+const LOCK_KEY = 'tmspeech_locked';
 let captureTabId: number | null = null;
 let pipelineStatus = 'Stopped';
 let overlayLocked = false;
 let offscreenPort: chrome.runtime.Port | null = null;
 let reconnectTimer: any = null;
+// 坑：START_RECOGNITION 的异步体里有多个 await 点（closeDocument、轮询等最长可拖 1.5s+），
+// 期间用户点 STOP 触发 cleanupAll 后，START 残余代码仍会继续执行：重置 Running、新建
+// offscreen 文档、投递 INIT——用户已明确停止，采集却继续（幽灵会话）。
+// 解法：会话代次计数器，每次 START 与任何清理路径都自增；START 异步体在每个恢复点核对
+// 代次，不匹配立即中止（不再置状态/不发消息/不创建文档）。SW 重启后计数归零无妨：
+// 代次只在同一次 SW 生命周期内的 START 与清理之间做比对。
+let sessionEpoch = 0;
 
 function sendToPopup(msg: any) {
   chrome.runtime.sendMessage(msg).catch(() => {});
@@ -29,11 +40,28 @@ function persistSession() {
   }
 }
 
+// 坑：storage.local 的 get→push→set 是三步非原子操作，两条 SENTENCE_DONE 交错执行时
+// 后写会整体覆盖前写、丢掉一句转写。改为 promise 链串行化：同一时刻只允许一个读改写
+// 在途，后续追加排队等待（链条内所有异常都被捕获，队列永不 reject、不会卡死）。
+// 坑：数组原本只增不减，每句都把整个数组重新序列化写入（累计 O(n²)），且 storage.local
+// 配额 10MB，长会话触顶后 set 永久静默失败、转写从此停止记录。写入前裁剪到上限，
+// 只保留最近 TRANSCRIPT_MAX 条。
+const TRANSCRIPT_KEY = 'tmspeech_transcript';
+const TRANSCRIPT_MAX = 1000;
+let transcriptQueue: Promise<void> = Promise.resolve();
+
 function appendTranscript(text: string) {
-  chrome.storage.local.get('tmspeech_transcript').then(r => {
-    const arr: string[] = (r['tmspeech_transcript'] as string[]) || [];
-    arr.push(text);
-    chrome.storage.local.set({ 'tmspeech_transcript': arr });
+  transcriptQueue = transcriptQueue.then(async () => {
+    try {
+      const r = await chrome.storage.local.get(TRANSCRIPT_KEY);
+      const arr: string[] = (r[TRANSCRIPT_KEY] as string[]) || [];
+      arr.push(text);
+      if (arr.length > TRANSCRIPT_MAX) arr.splice(0, arr.length - TRANSCRIPT_MAX);
+      await chrome.storage.local.set({ [TRANSCRIPT_KEY]: arr });
+    } catch (e) {
+      // 配额触顶/存储异常不再静默：至少留一条日志可查。
+      console.log('[TM BG] 转写持久化失败:', e);
+    }
   });
 }
 
@@ -77,6 +105,11 @@ chrome.runtime.onConnect.addListener((port) => {
             captureTabId = reviveTabId;
             const id = captureTabId!;
             sendToTab(id, { type: 'OVERLAY_TOGGLE', visible: true });
+            // 坑：同 START——复活路径也必须把权威锁态推给（可能新建的）字幕层，
+            // 否则重连自愈后新层按未锁定样式绘制且无人纠正。
+            chrome.storage.local.get(LOCK_KEY).then(r => {
+              sendToTab(id, { type: 'LOCK_TOGGLE', locked: r[LOCK_KEY] === true });
+            }).catch(() => {});
             (async () => { sendToTab(id, { type: 'TEXT_CHANGED', text: await t('waiting') }); })();
             chrome.storage.local.get('tmspeech_prefs').then(r => {
               const prefs = (r['tmspeech_prefs'] as any) || {};
@@ -107,6 +140,8 @@ chrome.runtime.onConnect.addListener((port) => {
     reconnectTimer = setTimeout(() => {
       if (pipelineStatus !== 'Running') return;
       console.log('[TM BG] 重连超时，清理');
+      // 此路径不走 cleanupAll，但同样要作废在途的 START 异步体，防止超时清理被残余启动代码"复活"。
+      sessionEpoch++;
       pipelineStatus = 'Stopped';
       if (captureTabId) {
         sendToTab(captureTabId, { type: 'OVERLAY_TOGGLE', visible: false });
@@ -159,6 +194,9 @@ function hideOverlay(tabId: number | null) {
 }
 
 function cleanupAll() {
+  // 坑：任何清理都必须作废在途的 START 异步体——否则 STOP 后残余启动代码会重建
+  // offscreen 文档并恢复采集（幽灵会话）。自增代次后，START 各恢复点的比对全部失配。
+  sessionEpoch++;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   const tabId = captureTabId;
   pipelineStatus = 'Stopped';
@@ -219,29 +257,50 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // offscreen 里 getUserMedia 报 "Error starting tab capture"。
       // 同时清掉可能遗留的重连超时定时器，防止它把刚启动的新会话误判成断连而清场。
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      // 本次启动的会话代次：异步体在每个 await 恢复点核对，期间发生过任何清理
+      // （STOP/关标签页/错误清理）代次都会前进，此时必须立即中止后续步骤，
+      // 否则就是"用户已停止但采集继续"的幽灵会话。
+      const myEpoch = ++sessionEpoch;
+      const stale = () => myEpoch !== sessionEpoch;
       await chrome.offscreen.closeDocument().catch(() => {});
+      if (stale()) { sendResponse({}); return; }
       // closeDocument 会触发 onDisconnect 置空 offscreenPort
       // 等旧文档真正消失（上限 1.5s）再继续，给 Chrome 时间异步释放旧 capture 流
       const releaseDeadline = Date.now() + 1500;
       while (await chrome.offscreen.hasDocument()) {
         if (Date.now() > releaseDeadline) break; // 极端情况下放行，让后续错误正常暴露
         await new Promise(r => setTimeout(r, 50));
+        if (stale()) { sendResponse({}); return; }
       }
       chrome.storage.session.remove(PENDING_KEY);
+      if (stale()) { sendResponse({}); return; }
 
       pipelineStatus = 'Running';
       captureTabId = msg.tabId || null;
       persistSession();
       if (captureTabId && msg.overlayVisible) {
         const alreadyInjected = await isContentScriptInjected(captureTabId);
+        if (stale()) { sendResponse({}); return; }
         if (!alreadyInjected) {
           await chrome.scripting.executeScript({
             target: { tabId: captureTabId },
             files: ['content.js'],
           }).catch(() => {});
+          if (stale()) { sendResponse({}); return; }
         }
         sendToTab(captureTabId, { type: 'OVERLAY_TOGGLE', visible: true });
+        // 坑：新建字幕层初始按未锁定样式绘制，content 自身异步读 storage 存在窗口期；
+        // 若权威锁态是"已锁"而无人纠正，就出现用户报告的"锁定后仍有半透明背景/毛玻璃"。
+        // 这里读唯一事实源立即补发 LOCK_TOGGLE，让新层马上收敛到权威锁态。
+        chrome.storage.local.get(LOCK_KEY).then(r => {
+          // fire-and-forget 回调同样要核对会话代次，防止停止后残留回调打扰新会话。
+          if (stale() || !captureTabId) return;
+          sendToTab(captureTabId!, { type: 'LOCK_TOGGLE', locked: r[LOCK_KEY] === true });
+        }).catch(() => {});
         chrome.storage.local.get('tmspeech_prefs').then(r => {
+          // 坑：此回调是 fire-and-forget，恢复执行时不做代次核对的话，
+          // 停止后残留的回调会把 prefs 发到新会话（或已停止会话）的标签页上。
+          if (stale() || !captureTabId) return;
           const prefs = (r['tmspeech_prefs'] as any) || {};
           if (prefs.fontSize) sendToTab(captureTabId!, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
           sendToTab(captureTabId!, { type: 'SET_PREV_OPTS', showPrev: prefs.showPrev !== false, prevOpacity: prefs.prevOpacity ?? 35 });
@@ -253,10 +312,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // getUserMedia，就会报 "Error starting tab capture"。改为由 offscreen 在模型
       // 就绪后发 REQUEST_STREAM，这里即时签发、立即消费。
       await ensureOffscreen();
+      if (stale()) { sendResponse({}); return; }
 
       const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
       const punctPref = (await chrome.storage.local.get('tmspeech_use_punct'))['tmspeech_use_punct'];
       const prefs = ((await chrome.storage.local.get('tmspeech_prefs'))['tmspeech_prefs'] as any) || {};
+      if (stale()) { sendResponse({}); return; }
       const initMsg: any = { type: 'INIT_OFFSCREEN', tabId: msg.tabId, lang, usePunct: punctPref !== false };
       if (prefs.endpointRule1) initMsg.endpointRule1 = prefs.endpointRule1;
       if (prefs.endpointRule2) initMsg.endpointRule2 = prefs.endpointRule2;
@@ -265,6 +326,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         offscreenPort.postMessage(initMsg);
       } else {
         await chrome.storage.session.set({ [PENDING_KEY]: initMsg });
+        if (stale()) {
+          // 坑：pending 快照是给"下一个连上的 offscreen 文档"的投递队列——START 已被
+          // 作废时必须删掉它，否则下次无关的端口连接会把过期 INIT 投递出去（幽灵启动）。
+          chrome.storage.session.remove(PENDING_KEY).catch(() => {});
+          sendResponse({});
+          return;
+        }
       }
 
       sendResponse({});
@@ -295,7 +363,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'GET_STATUS') {
-    sendResponse({ status: pipelineStatus, locked: overlayLocked });
+    // 坑：locked 不能只读内存缓存——SW 重启后 overlayLocked 归零，会向 popup 谎报
+    // locked=false 而页面字幕层实际仍锁定。改为异步回源 storage（唯一事实源）。
+    // 处理器因此异步化：必须保持 return true，否则 sendResponse 通道在监听器返回后
+    // 即关闭，popup 永远收不到响应（其余同步分支不受影响，各自显式 sendResponse）。
+    chrome.storage.local.get(LOCK_KEY).then(r => {
+      sendResponse({ status: pipelineStatus, locked: r[LOCK_KEY] === true });
+    }).catch(() => {
+      // storage 异常时退化为内存缓存值，至少不阻塞 popup 初始化。
+      sendResponse({ status: pipelineStatus, locked: overlayLocked });
+    });
     return true;
   }
 
@@ -305,6 +382,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === 'LOCK_TOGGLE') {
     overlayLocked = msg.locked;
+    // 坑：popup 发起的锁定此前从不写 storage（只有字幕层按钮的 toggleLock 会写），
+    // 三端记账由此发散：popup 锁定后 SW 重启/字幕层重建时读到的仍是旧值。
+    // storage.local['tmspeech_locked'] 是唯一事实源，转发的同时必须持久化。
+    chrome.storage.local.set({ [LOCK_KEY]: msg.locked === true }).catch(() => {});
     if (captureTabId) sendToTab(captureTabId, { type: 'LOCK_TOGGLE', locked: msg.locked });
   }
 

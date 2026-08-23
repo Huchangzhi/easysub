@@ -1,4 +1,10 @@
 {
   "extensionName": { "message": "EasySub - Real-time Speech Subtitles" },
-  "extensionDescription": { "message": "A free, privacy-first offline browser extension that generates real-time subtitles using on-device WASM speech recognition." }
+  "extensionDescription": { "message": "A free, privacy-first offline browser extension that generates real-time subtitles using on-device WASM speech recognition." },
+  "helpHint": { "message": "View help" },
+  "helpPunct": { "message": "When on, a local punctuation model inserts punctuation while text streams in. Its inference runs interleaved with recognition and can slightly reduce accuracy for some words; turn off for maximum per-word accuracy." },
+  "helpPrev": { "message": "Shows the previous finished sentence on screen so you can glance back at what was just said. Lower opacity makes that line fainter and less obtrusive." },
+  "helpEndpoint1": { "message": "Ends the current sentence once trailing silence reaches this many seconds. Lower values split sooner into shorter lines; higher values keep sentences complete but finalize subtitles later." },
+  "helpEndpoint2": { "message": "Also tries to break at short pauses during continuous speech to split long passages. Lower it to cut more eagerly at brief pauses; raise it to reduce false breaks, at the cost of longer sentences." },
+  "helpEndpoint3": { "message": "Force-finishes the sentence when it reaches this duration even without a detected pause, so no single subtitle line gets too long to read." }
 }

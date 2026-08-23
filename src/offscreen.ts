@@ -13,6 +13,10 @@ let prevSentence = '';
 let usePunct = true;
 let punctPending = false;
 let lastPunctText = '';
+// 坑：标点延迟回调的代次令牌。INIT 重启或 STOP 停止时递增，在途的 setTimeout(0) 标点
+// 回调触发时发现代次已变就整体丢弃（不写缓存不发消息），防止上一场字幕串进新会话、
+// 或停止后字幕被迟到的标点结果"复活"。
+let punctEpoch = 0;
 let audioCtx: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let audioEl: HTMLAudioElement | null = null;
@@ -119,9 +123,18 @@ function startFallbackCapture(stream: MediaStream) {
     pipeline?.feedAudio(ctx.sampleRate === 16000 ? buf : resample(buf, ctx.sampleRate, 16000));
   };
   source.connect(node);
+  // 坑：ScriptProcessorNode 只有被下游拉取（连接到 destination 一侧）时才会驱动，
+  // 不连 destination 的话 onaudioprocess 永远不会触发，降级路径采到的是零帧。
+  // 但绝不能把捕获流/节点直连 destination——audioEl 已在播放该流，直连会造成
+  // 声音双重播放；正确做法是经 gain=0 的 GainNode 桥接：处理链保持活跃且完全静音。
+  const muteGain = ctx.createGain();
+  muteGain.gain.value = 0;
+  node.connect(muteGain);
+  muteGain.connect(ctx.destination);
   ctx.resume().catch(() => {});
   fallbackCleanup = () => {
     node.disconnect();
+    muteGain.disconnect();
     source.disconnect();
     ctx.close().catch(() => {});
   };
@@ -155,6 +168,14 @@ function setupPort() {
       pipeline?.stop();
       pipeline = null;
 
+      // 坑：跨会话残留的文本状态会让新会话开头闪出上一场的字幕；这里全部清零，
+      // 并递增标点代次使所有在途的标点延迟回调失效（回调内部会校验代次）。
+      lastText = '';
+      prevSentence = '';
+      lastPunctText = '';
+      punctPending = false;
+      punctEpoch++;
+
       pipeline = new Pipeline({
         onTextChanged: (text) => {
           lastText = text;
@@ -167,7 +188,11 @@ function setupPort() {
               // ponytail: setTimeout(0) 推迟标点推理，避免同步阻塞 audio pump 丢帧
               // ponytail: lastPunctText 缓存上次结果过渡显示，onSentenceDone 清空防止闪旧文
               punctPending = true;
+              const epoch = punctEpoch;
               setTimeout(() => {
+                // 坑：回调触发时若会话已重启/停止（代次已变），本次推理整体丢弃：
+                // 不写 lastPunctText、不发消息。punctPending 已由 INIT/STOP 重置，无需在此清理。
+                if (epoch !== punctEpoch) return;
                 punctPending = false;
                 lastPunctText = addPunctuation(lastText);
                 sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: lastPunctText })
@@ -275,6 +300,10 @@ function setupPort() {
       stopAudio();
       pipeline?.stop();
       pipeline = null;
+      // 坑：停止同样要作废在途的标点延迟回调，否则迟到的标点结果会把已清空的
+      // 字幕重新写回缓存并推给 content/popup，表现为"点了停止字幕又复活"。
+      punctPending = false;
+      punctEpoch++;
     }
     } catch (e) { log('消息处理异常: ' + ((e as any)?.stack || e)); }
   });
@@ -282,10 +311,18 @@ function setupPort() {
 
 setupPort();
 
+// 坑：preload.js 只在 onRuntimeInitialized 成功时置 __wasmReady，失败时没有任何信号，
+// 所以这里只能靠超时兜底。超时即认定 WASM 初始化失败，抛错走 INIT 的异常通道
+// （外层 catch 会发 FW_POP ERROR），由 background 统一清理；否则轮询永不退出，
+// 会话永远停在"等待识别"且无任何错误上报。
 async function waitForWasm(): Promise<void> {
   if ((window as any).__wasmReady) return;
   log('等待 WASM 加载...');
+  const deadline = Date.now() + 30_000;
   while (!(window as any).__wasmReady) {
+    if (Date.now() > deadline) {
+      throw new Error('WASM 初始化超时（30s），模型可能加载失败');
+    }
     await new Promise(r => setTimeout(r, 200));
   }
   log('WASM 已就绪');

@@ -141,6 +141,56 @@ body {
 .icon-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
 .lang-switch { font-weight: 600; min-width: 32px; justify-content: center; }
 
+/* Help icon (?) + pure CSS hover/focus tooltip */
+.help-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+.help-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; padding: 0;
+  border: none; border-radius: 50%; background: transparent; color: var(--text2);
+  cursor: help;
+  transition: color 150ms var(--ease-out), background 150ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.help-btn:hover { color: var(--text); background: var(--surface); }
+.help-btn:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 1px; color: var(--text); }
+.help-btn:active { transform: scale(0.9); }
+.help-btn svg { width: 14px; height: 14px; pointer-events: none; }
+.help-tip {
+  position: absolute;
+  /* 坑：popup 视口仅 340px 宽，气泡必须向上弹出且向右展开（left 锚定）——
+     向下弹会在页面底部撑出滚动条，居中/右锚定会溢出左/右边缘被窗口裁掉。
+     所有 ? 图标都位于行内左侧（x≈100~160px），210px 宽度最右也只到 ~340px 内。 */
+  bottom: calc(100% + 6px);
+  left: -8px;
+  z-index: 30;
+  width: max-content; max-width: 210px;
+  padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: rgba(20, 20, 30, 0.92);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  color: var(--text); font-size: 11px; font-weight: 400; line-height: 1.55;
+  text-align: left; white-space: normal;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out), visibility 0s linear 160ms;
+}
+/* 气泡小箭头：旋转方块借 inherit 底色 + 同色描边，与气泡边框对齐 */
+.help-tip::after {
+  content: ''; position: absolute; top: calc(100% - 5px); left: 14px;
+  width: 8px; height: 8px;
+  background: inherit;
+  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  transform: rotate(45deg);
+  border-bottom-right-radius: 2px;
+}
+/* 键盘可达性：Tab 聚焦到 ? 按钮时同样显示气泡 */
+.help-wrap:hover .help-tip,
+.help-wrap:focus-within .help-tip {
+  opacity: 1; visibility: visible; transform: translateY(0);
+  transition-delay: 0s;
+}
+
 /* Slider group */
 .slider-group { display: flex; align-items: center; gap: 6px; flex: 1; }
 .slider-label { font-size: 11px; color: var(--text2); white-space: nowrap; }
@@ -199,13 +249,13 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .btn, .icon-btn, .container > *, .status-dot,
+  .btn, .icon-btn, .help-btn, .help-tip, .container > *, .status-dot,
   input[type="range"], input[type="range"]::-webkit-slider-thumb,
   .preview .sentence, .status-bar, .model-info,
   .transcript-box, .disclaimer {
     transition: none !important; animation: none !important;
   }
-  .btn:active, .icon-btn:active { transform: none; }
+  .btn:active, .icon-btn:active, .help-btn:active { transform: none; }
   .container > * { opacity: 1; transform: none; }
 }
 </style>
@@ -271,6 +321,12 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
     <div class="row">
       <input type="checkbox" id="chkShowPrev" checked>
       <label for="chkShowPrev" id="showPrev">显示上一句</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnPrev" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipPrev">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipPrev">在画面上额外显示上一条已完成的句子，方便回看刚说过的内容；透明度越低上一句越淡，越不遮挡画面。</span>
+      </span>
       <span class="slider-group">
         <span class="slider-label" id="prevOpacity">透明度</span>
         <input type="range" id="prevOpacitySlider" min="5" max="100" value="35">
@@ -286,11 +342,24 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
     <div class="row">
       <input type="checkbox" id="chkPunct" checked>
       <label for="chkPunct" id="showPunct">流式标点添加</label>
-      <span class="note" id="punctNote">(可能降低识别准确率)</span>
+      <!-- 坑：原小字注释 punctNote 已升级为 ? 帮助气泡（文案含"为何可能降低准确率"），
+           applyLang 里对应的 punctNote 赋值必须同步删除，否则 null.textContent 会抛错 -->
+      <span class="help-wrap">
+        <button type="button" id="helpBtnPunct" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipPunct">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipPunct">开启后在识别的同时由本地标点模型即时补加标点。标点推理穿插在识别流程中同步执行，可能干扰声学识别，个别词的准确率会轻微下降；追求逐字最准可关闭。</span>
+      </span>
     </div>
     <div class="row">
       <span class="slider-group" style="flex:1;">
         <span class="slider-label" id="endpointLabel1">句尾停顿(秒)</span>
+        <span class="help-wrap">
+          <button type="button" id="helpBtnEndpoint1" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipEndpoint1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </button>
+          <span class="help-tip" role="tooltip" id="helpTipEndpoint1">说话人停下、尾部静音达到该秒数时结束当前句。调小断句更快但句子偏碎；调大句子更完整，字幕定稿稍晚。</span>
+        </span>
         <input type="range" id="endpointRule1" min="2" max="20" value="8">
         <span class="slider-value" id="endpointVal1">0.8s</span>
       </span>
@@ -298,6 +367,12 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
     <div class="row">
       <span class="slider-group" style="flex:1;">
         <span class="slider-label" id="endpointLabel2">句中停顿(秒)</span>
+        <span class="help-wrap">
+          <button type="button" id="helpBtnEndpoint2" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipEndpoint2">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </button>
+          <span class="help-tip" role="tooltip" id="helpTipEndpoint2">连续讲话中的短停顿达到该秒数时也会尝试断句，用于切分长段语流。调小更容易在短停顿处切句，调大减少误切但单句可能偏长。</span>
+        </span>
         <input type="range" id="endpointRule2" min="2" max="15" value="6">
         <span class="slider-value" id="endpointVal2">0.6s</span>
       </span>
@@ -305,6 +380,12 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
     <div class="row">
       <span class="slider-group" style="flex:1;">
         <span class="slider-label" id="endpointLabel3">最大句长(秒)</span>
+        <span class="help-wrap">
+          <button type="button" id="helpBtnEndpoint3" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipEndpoint3">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </button>
+          <span class="help-tip" role="tooltip" id="helpTipEndpoint3">无论是否检测到停顿，当前句累计到该时长就强制结束，避免单条字幕过长难以阅读。</span>
+        </span>
         <input type="range" id="endpointRule3" min="5" max="40" value="15">
         <span class="slider-value" id="endpointVal3">15s</span>
       </span>
@@ -348,6 +429,9 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 
   <div class="disclaimer" id="disclaimer">字幕由模型识别，不保证准确</div>
 </div>
-<script src="popup.js"></script>
+<!-- 坑：此处不能手写 <script src="popup.js">——HtmlWebpackPlugin 默认 inject:true 已自动
+     注入 <script defer src="popup.js">（见 webpack.config.js），手写会导致同一脚本执行两遍：
+     popup.ts 的 onMessage 监听器注册两次，每条 SENTENCE_DONE 被处理两次，
+     预览与"复制"内容每句重复。加载途径以插件注入为唯一来源。 -->
 </body>
 </html>

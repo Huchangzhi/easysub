@@ -16,11 +16,37 @@ const CN_EXCL_END = /(啊|呀|哇|哦|噢|啦|嘛|呵|哈|哟|呐|哪|咧)$/
 
 const EN_EXCL_START = /^(WHAT\s+A|HOW\s+(A|MANY|MUCH|LONG|FAR|TALL|DEEP|WIDE)|OH|WOW|AH|OOH|YAY|YEAH|NAH|NOPE|YES|NO|GREAT|AWESOME|EXCELLENT|PERFECT|WONDERFUL|AMAZING|INCREDIBLE|TERRIBLE|HORRIBLE|AWFUL|STOP|GO|LOOK|LISTEN|WATCH|COME|RUN|HELP|DANG|DARN|CRAP|SHIT)\b/i
 
-const CN_COMMA_AFTER = /^(不过|但是|然而|因此|所以|因为|虽然|尽管|如果|要是|假如|倘若|而且|并且|况且|何况|此外|另外|还有|还有呢|特别是|尤其是|首先|其次|然后|最后|最终|例如|比如|譬如|换句话说|也就是说|换言之|总的来说|总而言之|总的来说呢|事实上|其实|当然|确实|的确|显然|一般说来|一般情况下|一般来说|通常来说|严格来说|具体来说|简单来说|相对而言|相比之下|与此相反|反过来|反过来说|另一方面|一方面|一来|二来|一来呢|二来呢|首先呢|其次呢|然后呢|不过呢|但是呢|所以说|所以说呢|这样的话|这样一来|这么一来|如此以来|于是乎|于是)\b/
+// 坑：同 CN_CONJ_MID，尾部 \b 在纯中文后永远不成立（"所以我们…"全不命中）。
+// 且去掉边界约束后暴露第二个坑：备选词表里有重叠词（还有/还有呢、首先/首先呢、
+// 所以/所以说/所以说呢、一来/一来呢…），正则交替取"最左候选"，短词会抢先命中，
+// 把逗号插错位置——如"然后呢我们就走了"会变成"然后，呢我们就走了"。
+// 修复：由词表动态构建正则并按长度降序排列，保证最长词优先匹配；
+// 句首锚定 ^ 不需要尾部边界：所有候选都是完整连接词，其后无论是汉字还是
+// 英文/数字（如"因此AI很火"）都应紧跟逗号。
+const CN_COMMA_WORDS = [
+  '不过', '但是', '然而', '因此', '所以', '因为', '虽然', '尽管', '如果', '要是',
+  '假如', '倘若', '而且', '并且', '况且', '何况', '此外', '另外', '特别是', '尤其是',
+  '首先', '其次', '然后', '最后', '最终', '例如', '比如', '譬如', '换句话说',
+  '也就是说', '换言之', '总的来说', '总而言之', '事实上', '其实', '当然', '确实',
+  '的确', '显然', '一般说来', '一般情况下', '一般来说', '通常来说', '严格来说',
+  '具体来说', '简单来说', '相对而言', '相比之下', '与此相反', '反过来',
+  '反过来说', '另一方面', '一方面', '这样的话', '于是乎', '于是',
+  // 带"呢"的长变体必须参与长度排序，否则会被对应短词抢先遮蔽
+  '还有', '还有呢', '首先呢', '其次呢', '然后呢', '不过呢', '但是呢',
+  '所以说', '所以说呢', '一来', '一来呢', '二来', '二来呢',
+]
+const CN_COMMA_AFTER = new RegExp(
+  '^(' + [...new Set(CN_COMMA_WORDS)].sort((a, b) => b.length - a.length).join('|') + ')'
+)
 
 const EN_COMMA_AFTER = /^(HOWEVER|THEREFORE|FURTHERMORE|MOREOVER|NEVERTHELESS|NONETHELESS|MEANWHILE|BESIDES|ADDITIONALLY|ALSO|FIRST(LY)?|SECOND(LY)?|THIRD(LY)?|FINALLY|NEXT|THEN|LAST(LY)?|LIKEWISE|SIMILARLY|CONVERSELY|INSTEAD|OTHERWISE|SPECIFICALLY|PARTICULARLY|NOTABLY|INDEED|CERTAINLY|SURELY|UNDOUBTEDLY|ADMITTEDLY|HONESTLY|FRANKLY|ACTUALLY|BASICALLY|ESSENTIALLY|TYPICALLY|NORMALLY|USUALLY|TRADITIONALLY|ULTIMATELY|EVENTUALLY|RECENTLY|CURRENTLY|INITIALLY|ORIGINALLY|BRIEFLY|IN SHORT|IN BRIEF|IN SUMMARY|TO SUMMARIZE|IN CONCLUSION|IN OTHER WORDS|IN PARTICULAR|IN GENERAL|IN FACT|AS A RESULT|AS A CONSEQUENCE|FOR EXAMPLE|FOR INSTANCE|ON THE CONTRARY|ON THE OTHER HAND|AS A MATTER OF FACT|IN ADDITION|IN THE SAME WAY|IN THE MEANTIME|AT FIRST|AT LAST|AT LEAST|AFTER ALL|ABOVE ALL|ALL IN ALL|MOST IMPORTANTLY)\b/i
 
-const CN_CONJ_MID = /\b(但是|然而|不过|可是|只是|因此|所以|因为|虽然|尽管|如果|要是|假如|倘若|而且|并且|况且|何况|否则|不然|要不|要不然|于是|从而|进而|以致|以便|以免|免得)\b/
+// 坑：JS 正则的 \b 是 ASCII 词界（\w 仅含 [A-Za-z0-9_]），汉字与汉字之间不存在词界，
+// 导致 /\b(但是|…)\b/ 这类写法在纯中文文本里永远匹配不到（实测"我很好但是现在没空"
+// 不命中），回退标点模式下中文逗号功能整体失效。
+// 修复：改用 ASCII 字母数字的前置/后置断言（lookbehind 需 Chrome 62+/MV3 88+，可用）：
+// 两侧允许是汉字（兼容纯中文与中英混排），同时保证不会切进英文单词内部。
+const CN_CONJ_MID = /(?<![A-Za-z0-9])(但是|然而|不过|可是|只是|因此|所以|因为|虽然|尽管|如果|要是|假如|倘若|而且|并且|况且|何况|否则|不然|要不|要不然|于是|从而|进而|以致|以便|以免|免得)(?![A-Za-z0-9])/
 const EN_CONJ_MID = /\b(HOWEVER|THEREFORE|FURTHERMORE|MOREOVER|NEVERTHELESS|MEANWHILE|BESIDES|ADDITIONALLY|ALSO|CONVERSELY|INSTEAD|OTHERWISE|THUS|HENCE)\b/i
 
 function insertComma(s: string): string {

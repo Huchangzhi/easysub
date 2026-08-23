@@ -40,7 +40,15 @@ const strings: Record<string, Record<string, string>> = {
     secPrev: '上一句',
     secPunct: '标点/断句',
     resetEndpoint: '默认',
-    punctNote: '(可能降低识别准确率)',
+    // —— 设置项悬停帮助（问号气泡文案）——
+    // 坑：punctNote 小字注释已升级为 helpPunct 问号帮助，旧 key 一并移除，
+    // 否则留下死字符串容易让后续维护者误以为 popup 上仍有该注释。
+    helpHint: '查看帮助',
+    helpPunct: '开启后在识别的同时由本地标点模型即时补加标点。标点推理穿插在识别流程中同步执行，可能干扰声学识别，个别词的准确率会轻微下降；追求逐字最准可关闭。',
+    helpPrev: '在画面上额外显示上一条已完成的句子，方便回看刚说过的内容；透明度越低上一句越淡，越不遮挡画面。',
+    helpEndpoint1: '说话人停下、尾部静音达到该秒数时结束当前句。调小断句更快但句子偏碎；调大句子更完整，字幕定稿稍晚。',
+    helpEndpoint2: '连续讲话中的短停顿达到该秒数时也会尝试断句，用于切分长段语流。调小更容易在短停顿处切句，调大减少误切但单句可能偏长。',
+    helpEndpoint3: '无论是否检测到停顿，当前句累计到该时长就强制结束，避免单条字幕过长难以阅读。',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -83,7 +91,12 @@ const strings: Record<string, Record<string, string>> = {
     secPrev: 'Previous',
     secPunct: 'Punctuation',
     resetEndpoint: 'Reset',
-    punctNote: '(may reduce accuracy)',
+    helpHint: 'View help',
+    helpPunct: 'When on, a local punctuation model inserts punctuation while text streams in. Its inference runs interleaved with recognition and can slightly reduce accuracy for some words; turn off for maximum per-word accuracy.',
+    helpPrev: 'Shows the previous finished sentence on screen so you can glance back at what was just said. Lower opacity makes that line fainter and less obtrusive.',
+    helpEndpoint1: 'Ends the current sentence once trailing silence reaches this many seconds. Lower values split sooner into shorter lines; higher values keep sentences complete but finalize subtitles later.',
+    helpEndpoint2: 'Also tries to break at short pauses during continuous speech to split long passages. Lower it to cut more eagerly at brief pauses; raise it to reduce false breaks, at the cost of longer sentences.',
+    helpEndpoint3: 'Force-finishes the sentence when it reaches this duration even without a detected pause, so no single subtitle line gets too long to read.',
   },
 };
 
