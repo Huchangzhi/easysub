@@ -34,11 +34,24 @@ const btnSearchClear = $('btnSearchClear') as HTMLButtonElement;
 // —— 新功能开关 ——
 const chkLookback = $('chkLookback') as HTMLInputElement;
 const chkLatency = $('chkLatency') as HTMLInputElement;
+// —— Hero 状态卡 / 主题系统 ——
+const hero = $('heroCard');
+const statusWordEl = $('statusWord');
+const timerEl = $('sessionTimer');
+// —— 波形 / 叠层外观 ——
+const waveCanvas = $('waveCanvas') as HTMLCanvasElement;
+const chkWaveform = $('chkWaveform') as HTMLInputElement;
+// —— 时间戳显示开关 ——
+const chkShowTs = $('chkShowTs') as HTMLInputElement;
 
 let locked = false;
 let lastStatus = 'Stopped';
+let hasStarted = false; // 是否启动过识别：区分 Hero 卡「待命」与「已停止」两种静止态
 let currentLang = 'zh_CN';
-let transcriptEntries: string[] = [];
+// 坑：t19 起存储契约升级为 {text, ts}（ts=Date.now()，0=legacy 无时标哨兵）——
+// 读取必须做 string→{text,ts:0} 懒归一化（bg 同款逻辑），否则 .text/.ts 是 undefined 直接炸 UI
+interface TranscriptEntry { text: string; ts: number }
+let transcriptEntries: TranscriptEntry[] = [];
 const PREFS_KEY = 'tmspeech_prefs';
 const TRANSCRIPT_KEY = 'tmspeech_transcript';
 
@@ -88,6 +101,21 @@ async function applyLang() {
   $('helpTipLookback').textContent = tr('helpLookback');
   $('showLatency').textContent = tr('showLatency');
   $('helpTipLatency').textContent = tr('helpLatency');
+  // —— 外观主题（色板名/分段控件名随语言切换，统一走 data-key 委托）——
+  $('appearanceLabel').textContent = tr('appearanceLabel');
+  $('overlayBgLabel').textContent = tr('overlayBgLabel');
+  document.querySelectorAll<HTMLElement>('[data-key]').forEach(el => {
+    if (el.dataset.key) el.textContent = tr(el.dataset.key);
+  });
+  $('showWaveform').textContent = tr('showWaveform');
+  $('helpTipWaveform').textContent = tr('helpWaveform');
+  $('showTimestamps').textContent = tr('showTimestamps');
+  $('helpTipTimestamps').textContent = tr('helpTimestamps');
+  $('helpTipAppearance').textContent = tr('helpAppearance');
+  $('helpTipOverlayBg').textContent = tr('helpOverlayBg');
+  // Hero 大状态词也要跟随语言刷新（依据最近一次状态与是否启动过）
+  statusWordEl.textContent = tSync(currentLang,
+    lastStatus === 'Running' ? 'stateRunning' : (hasStarted ? 'stateStopped' : 'stateReady'));
   btnLang.textContent = tr('langSwitch');
   updateLockUI();
   renderTranscript();
@@ -109,6 +137,17 @@ async function loadPrefs() {
   // 与上次会话的真实可见性脱节（START 时才把当次值带上，用户上次的选择丢失）。
   // 键名 overlayVisible 与 START 消息的 msg.overlayVisible 对齐；默认开（!== false）。
   chkOverlay.checked = prefs.overlayVisible !== false;
+  // 主题：白名单校验，storage 被手改成未知值时回退 cyan（body 无匹配 data-theme
+  // 时 CSS 变量自然落到 :root 默认组，不会出现无色控件）
+  const theme = THEMES.includes(prefs.accentTheme) ? prefs.accentTheme : DEFAULT_THEME;
+  applyTheme(theme);
+  // 叠层外观三模式（契约与 content.ts t18 对齐：glass 默认/solid/outline）
+  const bm = BG_MODES.includes(prefs.overlayBgMode) ? prefs.overlayBgMode : 'glass';
+  applyBgMode(bm);
+  chkWaveform.checked = prefs.waveformEnabled !== false;
+  updateWaveVisibility();
+  // 时间戳显示默认开；切换只影响 popup 渲染，不进 FORWARD 链路
+  chkShowTs.checked = prefs.showTimestamps !== false;
   const po = prefs.prevOpacity ?? 35;
   prevOpacitySlider.value = String(po);
   prevOpacityLabel.textContent = String(po);
@@ -130,12 +169,172 @@ function savePrefs(partial: Record<string, any>) {
   });
 }
 
-function setStatus(status: string) {
+// —— C. 主题系统：切 body[data-theme] 换 CSS 变量组，纯属性切换零重排成本 ——
+const DEFAULT_THEME = 'cyan';
+// 坑：与 popup.html 中五个 .swatch 的 data-theme 一一对应；新增色板要两处同步
+const THEMES = ['cyan', 'emerald', 'violet', 'amber', 'rose'];
+// 波形当前柱颜色缓存：rAF 每帧读 getComputedStyle 太贵，主题切换时才刷新一次
+let accentCache = '#5e9eff';
+
+function applyTheme(theme: string) {
+  document.body.dataset.theme = theme;
+  document.querySelectorAll<HTMLButtonElement>('.swatch').forEach(b => {
+    const on = b.dataset.theme === theme;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', String(on));
+  });
+  accentCache = getComputedStyle(document.body).getPropertyValue('--accent').trim() || '#5e9eff';
+}
+
+document.querySelectorAll<HTMLButtonElement>('.swatch').forEach(b => {
+  b.onclick = () => {
+    const t = b.dataset.theme!;
+    applyTheme(t);
+    savePrefs({ accentTheme: t });
+  };
+});
+
+// —— 叠层外观三模式（契约：overlayBgMode ∈ 'glass'|'solid'|'outline'，字段名勿改）——
+// 坑：与 content.ts t18 的 BG_MODES 白名单保持一致，新增模式要两处同步
+const BG_MODES = ['glass', 'solid', 'outline'];
+
+function applyBgMode(mode: string) {
+  document.querySelectorAll<HTMLButtonElement>('.seg').forEach(b => {
+    const on = b.dataset.bgmode === mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', String(on));
+  });
+}
+
+document.querySelectorAll<HTMLButtonElement>('.seg').forEach(b => {
+  b.onclick = () => {
+    const m = b.dataset.bgmode!;
+    applyBgMode(m);
+    savePrefs({ overlayBgMode: m });
+    // 运行中即时生效走既有 PREFS_PATCH 转发链路（bg 只转发 payload）
+    chrome.runtime.sendMessage({
+      type: 'FORWARD_TO_CONTENT',
+      payload: { type: 'PREFS_PATCH', overlayBgMode: m },
+    }).catch(() => {});
+  };
+});
+
+// —— A. 实时波形条：LEVEL 消息入环形采样，rAF 仅在打开+Running 时重绘 ——
+const LEVEL_BARS = 60; // 保留最近 60 个采样（~120ms/条 ≈ 7 秒历史）
+let levels: number[] = [];
+let waveRaf = 0;
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+function drawWave() {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = waveCanvas.clientWidth || 300;
+  const cssH = 28;
+  // 坑：canvas 位图尺寸必须含 dpr，否则高分屏上波形模糊；容器宽变化（罕见）时重设
+  if (waveCanvas.width !== Math.round(cssW * dpr)) {
+    waveCanvas.width = Math.round(cssW * dpr);
+    waveCanvas.height = Math.round(cssH * dpr);
+  }
+  const ctx = waveCanvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  const gap = 2;
+  const barW = (cssW - gap * (LEVEL_BARS - 1)) / LEVEL_BARS;
+  const mid = cssH / 2;
+  for (let i = 0; i < LEVEL_BARS; i++) {
+    const v = levels[i] ?? 0;
+    // 静止基线：无数据时也画 2px 小柱，避免空白块突兀
+    const barH = Math.max(2, v * (cssH - 2));
+    ctx.fillStyle = i === LEVEL_BARS - 1 ? accentCache : 'rgba(255, 255, 255, 0.22)';
+    ctx.fillRect(i * (barW + gap), mid - barH / 2, barW, barH);
+  }
+}
+
+function startWave() {
+  // 坑：先 cancel 再启——Running 抖动会连发 startWave，不清旧 rAF 会叠多个循环越画越快
+  stopWaveLoop();
+  if (!chkWaveform.checked || lastStatus !== 'Running') { drawWave(); return; }
+  if (reduceMotion.matches) { drawWave(); return; } // 减弱动态：只随 LEVEL 消息事件驱动重绘
+  const loop = () => { drawWave(); waveRaf = requestAnimationFrame(loop); };
+  waveRaf = requestAnimationFrame(loop);
+}
+
+function stopWaveLoop() {
+  if (waveRaf) { cancelAnimationFrame(waveRaf); waveRaf = 0; }
+}
+
+function updateWaveVisibility() {
+  waveCanvas.style.display = chkWaveform.checked ? '' : 'none';
+  levels = []; // 关闭再开从空基线起步，不残留旧形状
+  if (lastStatus === 'Running' && chkWaveform.checked) startWave();
+  else { stopWaveLoop(); if (chkWaveform.checked) drawWave(); }
+}
+
+chkWaveform.onchange = () => {
+  savePrefs({ waveformEnabled: chkWaveform.checked });
+  updateWaveVisibility();
+};
+
+chkShowTs.onchange = () => {
+  // 只影响 popup 渲染层，storage 权威数据不动；即时重渲染无需 FORWARD
+  savePrefs({ showTimestamps: chkShowTs.checked });
+  renderTranscript();
+};
+
+// —— 会话计时：全面板仅此一个 interval ——
+let timerId: number | undefined = undefined;
+let runStartTs = 0;
+
+function fmtDuration(totalSec: number): string {
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const mm = String(m).padStart(2, '0'), ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+// 坑：必须先清后启——Running/Stopped 短时间抖动会连发 setStatus，
+// 不清旧 interval 会叠加出多个每秒回调，计时越走越快且停止后仍在跑
+function startTimer(baseTs?: number) {
+  stopTimer(false);
+  // 坑：计时基准优先用 bg 下发的 startedAt（会话真实开始时刻，纳入 storage.session
+  // 快照、SW 重启可恢复）——否则 popup 每次打开都从 00:00 重计，与"已进行时长"不符；
+  // 无戳（旧版本 bg/异常路径）才退回本地时刻，行为与旧版一致
+  runStartTs = baseTs && baseTs > 0 ? baseTs : Date.now();
+  timerEl.textContent = fmtDuration(Math.floor((Date.now() - runStartTs) / 1000));
+  timerId = window.setInterval(() => {
+    timerEl.textContent = fmtDuration(Math.floor((Date.now() - runStartTs) / 1000));
+  }, 1000);
+}
+
+function stopTimer(resetDisplay: boolean) {
+  if (timerId !== undefined) { clearInterval(timerId); timerId = undefined; }
+  if (resetDisplay) timerEl.textContent = '00:00';
+}
+
+function setStatus(status: string, startedAt?: number) {
   statusDot.className = 'status-dot ' + status;
   btnStart.disabled = status === 'Running';
   btnStop.disabled = status === 'Stopped';
   // 记录当前会话态，供 chkOverlay 切换时判断"是否处于运行中"以给出对应反馈
   lastStatus = status;
+  // Hero 卡联动：光晕描边 + 大状态词（待命→聆听中→已停止）+ 计时启停
+  hero.classList.toggle('Running', status === 'Running');
+  if (status === 'Running') {
+    hasStarted = true;
+    statusWordEl.textContent = tSync(currentLang, 'stateRunning');
+    // 坑：必须把 bg 下发的 startedAt 传给计时器——写死 startTimer() 会以"收到这条
+    // 消息的时刻"为基线，重开面板计时归零、跨面板不连续
+    startTimer(startedAt);
+    startWave();
+  } else {
+    // 停止即冻结并清零计时；波形停循环并画静止基线（ERROR 也走这里，同样停表）
+    stopTimer(true);
+    stopWaveLoop();
+    levels = [];
+    if (chkWaveform.checked) drawWave();
+    statusWordEl.textContent = tSync(currentLang, hasStarted ? 'stateStopped' : 'stateReady');
+  }
 }
 
 function log(msg: string) {
@@ -154,7 +353,7 @@ function updateLockUI() {
 btnStart.onclick = async () => {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tabId = tabs[0]?.id;
-  if (!tabId) { log('没有找到活跃标签页'); return; }
+  if (!tabId) { log(tSync(currentLang, 'noActiveTab')); return; }
 
   chrome.runtime.sendMessage({
     type: 'START_RECOGNITION',
@@ -178,11 +377,8 @@ chkOverlay.onchange = () => {
   chrome.runtime.sendMessage({ type: 'OVERLAY_TOGGLE', visible }).catch(() => {});
   // 可见反馈：运行中切换由 OVERLAY_TOGGLE 链路即时生效，无需提示；
   // 未启动会话时明确告知"已保存、下次开始识别时生效"，不再静默。
-  // 注：反馈文案暂内联双语（改动范围不含 i18n.ts，待后续补词条）。
   if (lastStatus !== 'Running') {
-    log(currentLang === 'zh_CN'
-      ? '当前无进行中的识别，设置已保存，下次开始时生效'
-      : 'No active session — saved, applies on next start');
+    log(tSync(currentLang, 'overlaySavedOffline'));
   }
 };
 
@@ -210,7 +406,11 @@ btnLang.onclick = async () => {
 
 async function loadTranscript() {
   const r = await chrome.storage.local.get(TRANSCRIPT_KEY);
-  transcriptEntries = (r[TRANSCRIPT_KEY] as string[]) || [];
+  // 坑：legacy 纯字符串与新版 {text,ts} 可能混存，读取必须懒归一化（同 bg 逻辑），
+  // 否则老用户升级后首次打开 popup 就在渲染层炸 undefined
+  transcriptEntries = ((r[TRANSCRIPT_KEY] as unknown[]) || []).map(e =>
+    typeof e === 'string' ? { text: e, ts: 0 } : { text: String((e as any)?.text ?? ''), ts: Number((e as any)?.ts) || 0 }
+  );
   renderTranscript();
 }
 
@@ -220,27 +420,48 @@ function saveTranscript() {
 
 function renderTranscript() {
   if (transcriptEntries.length === 0) {
-    transcriptBox.innerHTML = `<div class="transcript-empty" id="transcriptEmpty">${tSync(currentLang, 'transcriptEmpty')}</div>`;
+    // 空态：内联 SVG 图标 + 主句 + 双语提示语，垂直居中（样式见 .transcript-empty）
+    transcriptBox.innerHTML = `<div class="transcript-empty" id="transcriptEmpty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span>${tSync(currentLang, 'transcriptEmpty')}</span>
+      <small>${tSync(currentLang, 'transcriptHint')}</small></div>`;
     return;
   }
   const q = searchInput.value.trim().toLowerCase();
   if (!q) {
     // 无搜索词：原样全量渲染（清空搜索框后 DOM 完全复原走这里）
     transcriptBox.innerHTML = transcriptEntries.map(t =>
-      `<div class="transcript-entry">${escapeHtml(t)}</div>`
+      `<div class="transcript-entry">${renderEntryHtml(t)}</div>`
     ).join('');
     transcriptBox.scrollTop = transcriptBox.scrollHeight;
     return;
   }
   // 搜索态：纯内存过滤（数组 ≤1000 条），input 直接重渲，无防抖/无新常驻开销
-  const hits = transcriptEntries.filter(t => t.toLowerCase().includes(q));
+  const hits = transcriptEntries.filter(t => t.text.toLowerCase().includes(q));
   if (hits.length === 0) {
     transcriptBox.innerHTML = `<div class="transcript-empty">${tSync(currentLang, 'searchNoMatch')}</div>`;
     return;
   }
   transcriptBox.innerHTML = hits.map(t =>
-    `<div class="transcript-entry">${highlightEntry(t, q)}</div>`
+    `<div class="transcript-entry">${renderEntryHtml(t, q)}</div>`
   ).join('');
+}
+
+// 单条渲染：时间戳（相对本会话第一条带时标条目的 [mm:ss] 偏移）+ 正文
+function renderEntryHtml(entry: TranscriptEntry, q?: string): string {
+  // 坑：origin 曾取 transcriptEntries[0].ts——升级用户的存储里首条往往是 legacy(ts=0)，
+  // 会把整个列表的时间戳全部误伤抑制。改为取首条 ts>0 的条目做会话零点；
+  // 自身 ts=0（legacy/转发缺戳兜底）的条目仍单独不显示时标
+  const origin = transcriptEntries.find(t => t.ts > 0)?.ts || 0;
+  let html = '';
+  if (chkShowTs.checked && entry.ts > 0 && origin > 0) {
+    const sec = Math.max(0, Math.round((entry.ts - origin) / 1000));
+    const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+    const ss = String(sec % 60).padStart(2, '0');
+    html += `<span class="entry-ts">[${mm}:${ss}]</span> `;
+  }
+  html += (q ? highlightEntry(entry.text, q) : escapeHtml(entry.text));
+  return html;
 }
 
 // 坑：高亮必须"按原文切分、逐段转义后再拼 <mark>"——若先整体 escapeHtml 再替换
@@ -264,7 +485,7 @@ searchInput.oninput = () => {
   renderTranscript();
   const q = searchInput.value.trim().toLowerCase();
   if (!q) { searchCount.textContent = ''; return; }
-  const n = transcriptEntries.filter(t => t.toLowerCase().includes(q)).length;
+  const n = transcriptEntries.filter(t => t.text.toLowerCase().includes(q)).length;
   searchCount.textContent = tSync(currentLang, 'searchHits').replace('{n}', String(n));
 };
 
@@ -277,7 +498,8 @@ btnSearchClear.onclick = () => {
 };
 
 btnCopy.onclick = async () => {
-  const text = transcriptEntries.join('\n');
+  // 复制只拼纯文本，不带时间戳（时标仅用于屏上回看）
+  const text = transcriptEntries.map(t => t.text).join('\n');
   if (!text) return;
   await navigator.clipboard.writeText(text);
   const label = $('copyLabel');
@@ -316,6 +538,7 @@ $('btnResetEndpoint').onclick = () => {
   endpointVal2.textContent = ENDPOINT_DEFAULTS.endpointRule2.toFixed(1) + 's';
   endpointRule3.value = String(ENDPOINT_DEFAULTS.endpointRule3);
   endpointVal3.textContent = ENDPOINT_DEFAULTS.endpointRule3 + 's';
+  initRangeFills(); // 程序化赋值不触发 input 事件，填充色需手动刷新
   sendEndpoint();
 };
 
@@ -337,6 +560,25 @@ fontSizeSlider.oninput = () => {
   chrome.runtime.sendMessage({ type: 'SET_FONT_SIZE', fontSize: size }).catch(() => {});
   savePrefs({ fontSize: size });
 };
+
+// —— 滑杆填充：已选区间染 accent 色，仅 init/input 时重算，无定时器/无轮询 ——
+function updateRangeFill(el: HTMLInputElement) {
+  const min = parseFloat(el.min) || 0;
+  const max = parseFloat(el.max) || 100;
+  const p = ((parseFloat(el.value) - min) / (max - min)) * 100;
+  // 坑：Webkit 无法按 value 动态给 range 轨道着色（-webkit-slider-runnable-track
+  // 不接受动态进度），只能内联 linear-gradient 双色硬断点模拟填充；
+  // 百分比 toFixed(2) 消浮点尾巴，避免断点处出现 1px 锯齿
+  el.style.background = `linear-gradient(to right, var(--accent) ${p.toFixed(2)}%, var(--border) ${p.toFixed(2)}%)`;
+}
+function initRangeFills() {
+  document.querySelectorAll<HTMLInputElement>('input[type="range"]').forEach(updateRangeFill);
+}
+// addEventListener 与上方 .oninput 赋值互不覆盖，两个监听都会触发
+document.querySelectorAll<HTMLInputElement>('input[type="range"]').forEach(el => {
+  el.addEventListener('input', () => updateRangeFill(el));
+});
+initRangeFills(); // 先按 HTML 默认值兜底；storage 异步读回后再刷一次真实值
 
 // 坑：bg 的 FORWARD_TO_CONTENT 处理器只转发 msg.payload 给 content，
 // PREFS_PATCH 必须整体放进 payload；字段名是 popup↔content 的显示契约
@@ -368,18 +610,31 @@ chrome.runtime.onMessage.addListener((msg) => {
       el.textContent = msg.text;
       textPreview.prepend(el);
       if (textPreview.children.length > 10) textPreview.lastElementChild?.remove();
-      transcriptEntries.push(msg.text);
+      // 坑：bg 转发的 SENTENCE_DONE 可能不带 ts（旧版本/异常路径），归零走 legacy
+      // 渲染（无时标）；storage 里的权威条目由 bg appendTranscript 统一写 ts
+      transcriptEntries.push({ text: String(msg.text ?? ''), ts: Number(msg.ts) || 0 });
       renderTranscript();
       break;
     }
+    case 'LEVEL': {
+      // 坑：v 可能越界/非数值（测量端异常），钳到 [0,1] 防画布炸
+      const v = Math.max(0, Math.min(1, Number(msg.v) || 0));
+      levels.push(v);
+      if (levels.length > LEVEL_BARS) levels.shift();
+      // 减弱动态模式下无 rAF 循环，随消息事件驱动重绘（~120ms 一条，足够顺滑）
+      if (reduceMotion.matches && lastStatus === 'Running' && chkWaveform.checked) drawWave();
+      break;
+    }
     case 'STATUS_CHANGED':
-      setStatus(msg.status);
+      // bg 会在 Running 转发里附带 startedAt（会话真实开始时刻），用于校准计时基准
+      setStatus(msg.status, msg.startedAt);
       break;
     case 'LOG':
       log(msg.message);
       break;
     case 'ERROR':
-      log(`错误: ${msg.message}`);
+      // 坑：errorPrefix 的 {m} 是占位符，须手动 replace（与 searchHits 同一套约定）
+      log(tSync(currentLang, 'errorPrefix').replace('{m}', String(msg.message)));
       setStatus('Stopped');
       break;
     case 'LOCK_CHANGED':
@@ -394,7 +649,7 @@ function escapeHtml(s: string): string {
   d.textContent = s; return d.innerHTML;
 }
 
-loadPrefs();
+loadPrefs().then(initRangeFills); // storage 值写回滑杆后再刷填充色
 loadTranscript();
 applyLang();
 chrome.storage.local.get('tmspeech_use_punct').then(r => {
@@ -403,6 +658,7 @@ chrome.storage.local.get('tmspeech_use_punct').then(r => {
 // 坑：GET_STATUS 的 locked 现由 bg 异步回源 storage 后 sendResponse（处理器 return true），
 // promise 仍会正常 resolve，但响应晚于同步分支——此处不得假设响应同步可达。
 chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((resp: any) => {
-  if (resp?.status) setStatus(resp.status);
+  // 坑：status 缺失（响应异常）时不得调 setStatus——undefined 会落进 else 分支误显 Stopped
+  if (resp?.status) setStatus(resp.status, resp.startedAt);
   if (resp?.locked !== undefined) { locked = resp.locked; updateLockUI(); }
 }).catch(() => {});

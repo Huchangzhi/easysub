@@ -43,6 +43,37 @@ function recordLatency(rttMs: number, procMs: number) {
   lastLatencySentAt = Date.now();
   sendSafe('FW_CT', { type: 'LATENCY_UPDATE', ms: Math.round(latEmaMs) });
 }
+
+// ---- 音频电平测量（LEVEL 测量端，经 FW_POP 发送 { type:'LEVEL', v }）----
+// 口径：复用现有 60ms flush 回包路径的音频帧计算 RMS，经"慢攻击快释放"包络平滑后
+// 归一化到 [0,1]：
+//   - 攻击（上升）系数 0.2：读数缓慢爬升，语音突发不会让指示器刺眼跳变；
+//   - 释放（下降）系数 0.6：转静音时快速回落，指示不拖尾。
+// 归一化：rms×4 后截断到 [0,1]——正常语音块 RMS 约 0.05~0.25，×4 落在量程中上部；
+// 纯固定增益、无 AGC，极轻/极响音源可能偏低或顶格，属预期行为。
+// 静音：不做底噪抑制特判——数字采集的本底 RMS≈0，包络会自然趋 0。
+// 开销：每 60ms 块一次 O(n) 乘加累加（≈2880 样本，复用局部标量累加变量）+ 几次标量
+// 运算，无逐帧对象分配、无新增定时器，帧数据来自既有 flush 消息、零额外采集成本。
+let levelEnv = 0;
+let lastLevelSentAt = 0;
+
+function recordLevel(buf: Float32Array) {
+  let sumSq = 0;
+  for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i];
+  const rms = Math.sqrt(sumSq / Math.max(1, buf.length));
+  const target = Math.min(1, rms * 4);
+  // 坑：攻击/释放不对称是刻意的——对称平滑会在语音起音时明显滞后、静音时又拖尾；
+  // 两个系数作用于同一条标量包络，不引入额外状态。
+  levelEnv = target > levelEnv ? levelEnv * 0.8 + target * 0.2 : levelEnv * 0.4 + target * 0.6;
+  // 节流坑：≥120ms 一条（约 8 条/秒足够指示器流畅）；先查节流窗口再决定是否序列化发送，
+  // 不满足直接返回，避免每 60ms 都走一遍消息开销。
+  if (Date.now() - lastLevelSentAt < 120) return;
+  // 仅 pipeline Running 时发送；STOP/INIT 后 pipeline 为 null 或非 Running 自然停发，
+  // 且两端都会把包络归零（见 INIT/STOP 处理器），显示端按消息缺失自行清零显示。
+  if (!pipeline || pipeline.getStatus() !== JobStatus.Running) return;
+  lastLevelSentAt = Date.now();
+  sendSafe('FW_POP', { type: 'LEVEL', v: Math.round(levelEnv * 100) / 100 });
+}
 let audioCtx: AudioContext | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let audioEl: HTMLAudioElement | null = null;
@@ -119,6 +150,9 @@ async function startWorkletCapture(stream: MediaStream) {
     if (e.data && e.data.audio) {
       const buf = new Float32Array(e.data.audio);
       if (buf.length > 0) {
+        // 电平测量直接用本块帧数据算 RMS，必须在 feedAudio 之前（feedAudio 不改 buf，
+        // 但保持"测量先于消费"的顺序可读性更好）；开销口径见 recordLevel 注释。
+        recordLevel(buf);
         const sr = e.data.sampleRate || audioCtx!.sampleRate;
         const arrivedAt = performance.now();
         pipeline?.feedAudio(sr === 16000 ? buf : resample(buf, sr, 16000));
@@ -154,6 +188,8 @@ function startFallbackCapture(stream: MediaStream) {
   const node = ctx.createScriptProcessor(16384, 1, 1);
   node.onaudioprocess = (e) => {
     const buf = new Float32Array(e.inputBuffer.getChannelData(0));
+    // 降级路径同样复用帧数据测电平，保证降级时指示器不冻结（口径见 recordLevel 注释）。
+    recordLevel(buf);
     const t0 = performance.now();
     pipeline?.feedAudio(ctx.sampleRate === 16000 ? buf : resample(buf, ctx.sampleRate, 16000));
     // 降级路径没有 flush RTT 可测，只用同步处理耗时近似（口径见 recordLatency 注释）。
@@ -216,6 +252,9 @@ function setupPort() {
       latEmaMs = 0;
       lastFlushSentAt = 0;
       lastLatencySentAt = 0;
+      // 电平包络同步归零，防止新会话开头指示器从上一场的残留电平起步。
+      levelEnv = 0;
+      lastLevelSentAt = 0;
 
       pipeline = new Pipeline({
         onTextChanged: (text) => {
@@ -345,6 +384,9 @@ function setupPort() {
       // 字幕重新写回缓存并推给 content/popup，表现为"点了停止字幕又复活"。
       punctPending = false;
       punctEpoch++;
+      // 停止即归零电平包络并停发（pipeline 已置 null，recordLevel 的 Running 守卫兜底）。
+      levelEnv = 0;
+      lastLevelSentAt = 0;
     }
     } catch (e) { log('消息处理异常: ' + ((e as any)?.stack || e)); }
   });

@@ -11,6 +11,10 @@ const SESSION_KEY = 'runningSession';
 const LOCK_KEY = 'tmspeech_locked';
 let captureTabId: number | null = null;
 let pipelineStatus = 'Stopped';
+// 会话开始时刻（Date.now()）：START 成功或 FW_POP 首见 Running 时盖章；
+// 纳入 persistSession 快照，SW 重启后 GET_STATUS 仍能还原真实计时基准。
+// 0 = 无进行中会话（cleanupAll 清零）。
+let sessionStartedAt = 0;
 let overlayLocked = false;
 let offscreenPort: chrome.runtime.Port | null = null;
 let reconnectTimer: any = null;
@@ -34,7 +38,11 @@ function persistSession() {
   // 坑：会话快照的单一出口。所有改写 captureTabId/pipelineStatus 的地方都要同步调它，
   // 否则 SW 冷启动后 onRemoved/RECONNECT 会读到过期快照（把已停会话当活的，或反之）。
   if (pipelineStatus === 'Running' && captureTabId != null) {
-    chrome.storage.session.set({ [SESSION_KEY]: { tabId: captureTabId, status: pipelineStatus } }).catch(() => {});
+    // 坑：startedAt 仅在 >0 时写入——SW 冷启动恢复路径（RECONNECT 自愈）内存里是 0，
+    // 若无条件覆盖会把重启前已盖章的真实开始时刻冲掉，popup 计时又归零
+    const snap: any = { tabId: captureTabId, status: pipelineStatus };
+    if (sessionStartedAt > 0) snap.startedAt = sessionStartedAt;
+    chrome.storage.session.set({ [SESSION_KEY]: snap }).catch(() => {});
   } else {
     chrome.storage.session.remove(SESSION_KEY).catch(() => {});
   }
@@ -49,13 +57,27 @@ function persistSession() {
 const TRANSCRIPT_KEY = 'tmspeech_transcript';
 const TRANSCRIPT_MAX = 1000;
 let transcriptQueue: Promise<void> = Promise.resolve();
+// 条目契约：{ text: string, ts: number }。ts=Date.now()（句完成时刻）；
+// ts=0 是"legacy 无时标"的哨兵值——popup 显示/导出侧据此决定是否渲染时间戳。
+type TranscriptEntry = { text: string; ts: number };
+function normalizeTranscriptEntry(entry: unknown): TranscriptEntry {
+  // 坑：legacy 格式原因——旧版本把转写存成纯字符串数组且无迁移脚本，升级后存储里
+  // 会长期残留字符串条目。所有读取点必须做 typeof entry === 'string' 的懒归一化
+  // （归一化结果随后随整组写回，老数据在首次追加后即被逐步原地迁移），否则显示侧
+  // 读到 .text/.ts 属性就是 undefined，直接炸 UI。
+  return typeof entry === 'string' ? { text: entry, ts: 0 } : (entry as TranscriptEntry);
+}
 
-function appendTranscript(text: string) {
+function appendTranscript(text: string, ts: number = Date.now()) {
   transcriptQueue = transcriptQueue.then(async () => {
     try {
       const r = await chrome.storage.local.get(TRANSCRIPT_KEY);
-      const arr: string[] = (r[TRANSCRIPT_KEY] as string[]) || [];
-      arr.push(text);
+      // 坑：这是本文件唯一的存储读取点，必须先归一化再操作——混存的老字符串条目
+      // 若不做映射，裁剪与后续整组写回会把 legacy 数据原样续存，显示侧永远读到脏格式。
+      const arr = ((r[TRANSCRIPT_KEY] as unknown[]) || []).map(normalizeTranscriptEntry);
+      // 坑：必须用入参 ts——队列内再取 Date.now() 会在积压时漂移，入库时刻与
+      // 转发给 popup 的盖章时刻分叉，重开面板后时标对不上实时所见
+      arr.push({ text, ts });
       if (arr.length > TRANSCRIPT_MAX) arr.splice(0, arr.length - TRANSCRIPT_MAX);
       await chrome.storage.local.set({ [TRANSCRIPT_KEY]: arr });
     } catch (e) {
@@ -84,11 +106,30 @@ chrome.runtime.onConnect.addListener((port) => {
       sendToTab(captureTabId, msg.payload);
     }
     if (msg.type === 'FW_POP') {
-      sendToPopup(msg.payload);
-      if (msg.payload?.type === 'STATUS_CHANGED') { pipelineStatus = msg.payload.status; persistSession(); }
-      if (msg.payload?.type === 'ERROR') cleanupAll();
-      if (msg.payload?.type === 'SENTENCE_DONE') appendTranscript(msg.payload.text);
-      if (msg.payload?.type === 'LOG') console.log('[TM BG]', msg.payload.message);
+      const p = msg.payload || {};
+      if (p.type === 'STATUS_CHANGED') {
+        pipelineStatus = p.status;
+        // 坑：offscreen 不知道会话何时开始（尤其 SW 重启后 RECONNECT 自愈恢复的
+        // Running），首次见到 Running 就地盖章；已有戳（正常 START 路径）不覆盖
+        if (p.status === 'Running' && !sessionStartedAt) sessionStartedAt = Date.now();
+        persistSession();
+        // 附带 startedAt 让已打开的 popup 直接校准计时基准（重开面板不再从 00:00 起）
+        sendToPopup({ ...p, startedAt: sessionStartedAt });
+      } else if (p.type !== 'SENTENCE_DONE') {
+        // 坑：SENTENCE_DONE 不能走这里原样转发——下方盖章块会再发一份带 ts 的，
+        // 不排除的话 popup 每句收两条（一条无时标一条有），列表重复
+        sendToPopup(p);
+      }
+      if (p.type === 'ERROR') cleanupAll();
+      if (p.type === 'SENTENCE_DONE') {
+        // 坑：offscreen 发的 SENTENCE_DONE 只带 text 不带 ts——原样转发会让 popup
+        // 推 {text, ts:0}，新句在面板里永远不显示时间戳（storage 入库反而是对的）。
+        // 这里统一盖一次戳：转发与入库共用同一时刻，屏上偏移与存储条目严格一致。
+        const ts = Date.now();
+        sendToPopup({ ...p, ts });
+        appendTranscript(p.text, ts);
+      }
+      if (p.type === 'LOG') console.log('[TM BG]', p.message);
       if (msg.payload?.type === 'REQUEST_STREAM') {
         handleRequestStream(msg.payload.tabId);
       }
@@ -101,7 +142,17 @@ chrome.runtime.onConnect.addListener((port) => {
           // 它上报的标签页可能在 SW 死亡期间已被用户关闭；不校验存活的话，
           // "关标签页自动停止"会被这条自愈路径原样绕过（复活后继续解码静音）。
           const reviveTabId = msg.payload.tabId;
-          chrome.tabs.get(reviveTabId).then(() => {
+          chrome.tabs.get(reviveTabId).then(async () => {
+            // 坑：冷启动后内存 sessionStartedAt=0，必须先从快照回填真实开始时刻，
+            // 否则下面 persistSession 整对象覆写会把重启前盖的章抹掉、popup 计时归零
+            // （对齐 onRemoved 路径 :281 的回填做法）
+            if (!sessionStartedAt) {
+              try {
+                const stored = await chrome.storage.session.get(SESSION_KEY);
+                const sess = stored[SESSION_KEY] as { startedAt?: number } | undefined;
+                if (sess?.startedAt) sessionStartedAt = sess.startedAt;
+              } catch { /* 快照读不到就维持无戳，popup 退回本地基线 */ }
+            }
             captureTabId = reviveTabId;
             const id = captureTabId!;
             sendToTab(id, { type: 'OVERLAY_TOGGLE', visible: true });
@@ -116,7 +167,9 @@ chrome.runtime.onConnect.addListener((port) => {
               if (prefs.fontSize) sendToTab(id, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
               sendToTab(id, { type: 'SET_PREV_OPTS', showPrev: prefs.showPrev !== false, prevOpacity: prefs.prevOpacity ?? 35 });
             });
-            sendToPopup({ type: 'STATUS_CHANGED', status: 'Running' });
+            // 坑：startedAt 必须带上（可能为 0）——popup 据此校准计时基准；
+            // 且这行要放在回填之后，否则转发的还是 0
+            sendToPopup({ type: 'STATUS_CHANGED', status: 'Running', startedAt: sessionStartedAt });
             persistSession();
           }).catch(() => {
             // 标签页已不存在：offscreen 还在空转解码静音，走统一清理把文档整个关掉。
@@ -197,6 +250,7 @@ function cleanupAll() {
   // 坑：任何清理都必须作废在途的 START 异步体——否则 STOP 后残余启动代码会重建
   // offscreen 文档并恢复采集（幽灵会话）。自增代次后，START 各恢复点的比对全部失配。
   sessionEpoch++;
+  sessionStartedAt = 0; // 会话终结即清开始戳（epoch 失配/STOP/错误清理统一走这里）
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   const tabId = captureTabId;
   pipelineStatus = 'Stopped';
@@ -235,8 +289,13 @@ async function handleCapturedTabClosed(closedTabId: number) {
   if (tabId == null || status !== 'Running') {
     try {
       const stored = await chrome.storage.session.get(SESSION_KEY);
-      const sess = stored[SESSION_KEY] as { tabId: number; status: string } | undefined;
-      if (sess) { tabId = sess.tabId; status = sess.status; }
+      const sess = stored[SESSION_KEY] as { tabId: number; status: string; startedAt?: number } | undefined;
+      if (sess) {
+        tabId = sess.tabId; status = sess.status;
+        // 坑：冷启动内存 sessionStartedAt=0，从快照回填，保证后续 GET_STATUS/快照
+        // 续写的计时基准不丢（0 视为无戳，不覆盖语义）
+        if (sess.startedAt && !sessionStartedAt) sessionStartedAt = sess.startedAt;
+      }
     } catch { /* storage 异常时退化为纯内存判断 */ }
   }
   // 关闭的是非捕获标签页 → no-op。整窗关闭/浏览器退出时每个标签页都会触发本事件，
@@ -277,6 +336,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
       pipelineStatus = 'Running';
       captureTabId = msg.tabId || null;
+      sessionStartedAt = Date.now(); // START 成功即盖会话开始戳，计时基准唯一事实源
       persistSession();
       if (captureTabId && msg.overlayVisible) {
         const alreadyInjected = await isContentScriptInjected(captureTabId);
@@ -367,11 +427,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // locked=false 而页面字幕层实际仍锁定。改为异步回源 storage（唯一事实源）。
     // 处理器因此异步化：必须保持 return true，否则 sendResponse 通道在监听器返回后
     // 即关闭，popup 永远收不到响应（其余同步分支不受影响，各自显式 sendResponse）。
-    chrome.storage.local.get(LOCK_KEY).then(r => {
-      sendResponse({ status: pipelineStatus, locked: r[LOCK_KEY] === true });
+    // 坑：locked 与 startedAt 分属 storage.local / storage.session，Promise.all 双读合并
+    Promise.all([
+      chrome.storage.local.get(LOCK_KEY),
+      chrome.storage.session.get(SESSION_KEY),
+    ]).then(([lockR, snapR]) => {
+      const sess = snapR[SESSION_KEY] as { tabId: number; status: string; startedAt?: number } | undefined;
+      // 坑：SW 冷启动后内存 sessionStartedAt 归零，但 storage.session 快照里还有——
+      // 回源快照优先，内存值兜底（快照只在 Running 时存在，Stopped 时两者都无意义）
+      const startedAt = (pipelineStatus === 'Running' && sess?.startedAt) || sessionStartedAt || 0;
+      sendResponse({ status: pipelineStatus, locked: lockR[LOCK_KEY] === true, startedAt });
     }).catch(() => {
       // storage 异常时退化为内存缓存值，至少不阻塞 popup 初始化。
-      sendResponse({ status: pipelineStatus, locked: overlayLocked });
+      sendResponse({ status: pipelineStatus, locked: overlayLocked, startedAt: sessionStartedAt });
     });
     return true;
   }

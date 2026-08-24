@@ -17,13 +17,23 @@
   --green: #34c759;
   --orange: #ff9500;
   --red: #ff3b30;
+  /* 坑：--accent 及派生色是主题系统的唯一取色口，控件一律引变量不得写死色值。
+     :root 只放默认主题(cyan)，其余主题在下方 body[data-theme=…] 覆盖。 */
   --accent: #5e9eff;
+  --accent-dim: rgba(94, 158, 255, 0.35);
+  --accent-glow: rgba(94, 158, 255, 0.45);
   --radius: 14px;
 }
+/* —— 主题系统：5 套色板，切 data-theme 即全局换装 —— */
+body[data-theme="emerald"] { --accent: #34d399; --accent-dim: rgba(52, 211, 153, 0.35); --accent-glow: rgba(52, 211, 153, 0.45); }
+body[data-theme="violet"]  { --accent: #a78bfa; --accent-dim: rgba(167, 139, 250, 0.35); --accent-glow: rgba(167, 139, 250, 0.45); }
+body[data-theme="amber"]   { --accent: #fbbf24; --accent-dim: rgba(251, 191, 36, 0.35); --accent-glow: rgba(251, 191, 36, 0.45); }
+body[data-theme="rose"]    { --accent: #fb7185; --accent-dim: rgba(251, 113, 133, 0.35); --accent-glow: rgba(251, 113, 133, 0.45); }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-  width: 340px;
-  font: 400 13px/1.4 system-ui, -apple-system, sans-serif;
+  /* 用户实测反馈加宽到 380px；基础字号同步 13→12 提密度 */
+  width: 380px;
+  font: 400 12px/1.4 system-ui, -apple-system, sans-serif;
   background: var(--bg);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
@@ -32,7 +42,7 @@ body {
   border-radius: var(--radius);
   -webkit-font-smoothing: antialiased;
 }
-.container { display: flex; flex-direction: column; gap: 10px; }
+.container { display: flex; flex-direction: column; gap: 7px; }
 
 /* Stagger entry */
 .container > * {
@@ -52,48 +62,105 @@ body {
 .container.loaded > :nth-child(6) { transition-delay: 200ms; }
 .container.loaded > :nth-child(7) { transition-delay: 240ms; }
 .container.loaded > :nth-child(8) { transition-delay: 280ms; }
-.container.loaded > :nth-child(9) { transition-delay: 320ms; }
-.container.loaded > :nth-child(10) { transition-delay: 360ms; }
-.container.loaded > :nth-child(11) { transition-delay: 400ms; }
-.container.loaded > :nth-child(12) { transition-delay: 440ms; }
-.container.loaded > :nth-child(13) { transition-delay: 480ms; }
-.container.loaded > :nth-child(14) { transition-delay: 520ms; }
-.container.loaded > :nth-child(15) { transition-delay: 560ms; }
-.container.loaded > :nth-child(16) { transition-delay: 600ms; }
-.container.loaded > :nth-child(17) { transition-delay: 640ms; }
 
-/* Header */
-.header { display: flex; align-items: center; gap: 10px; }
-.header .title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; flex: 1; }
+/* —— 状态 Hero 卡 —— */
+/* 玻璃质感：表面渐变叠一层 accent 微光（随主题换色）；Running 时描边+外发光呈强调光晕 */
+.hero {
+  position: relative;
+  /* 坑：曾写 overflow:hidden 想裁渐变光晕——实际 background 本来就被 border-radius
+     裁进圆角，该属性只会误伤子节点：波形开关的 ？ 气泡（help-tip）是 hero 子节点，
+     向下弹出界即被父级裁掉半截。已移除；若日后往 hero 塞需要溢出裁剪的装饰层，
+     用 clip-path 或独立遮罩层，不要再加回 overflow:hidden。 */
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background:
+    radial-gradient(130% 100% at 12% 0%, var(--accent-dim), transparent 58%),
+    var(--surface);
+  transition: border-color 300ms var(--ease-out), box-shadow 300ms var(--ease-out);
+}
+.hero.Running { border-color: var(--accent); box-shadow: 0 0 16px var(--accent-glow); }
+.hero-top { display: flex; align-items: center; gap: 8px; }
+.hero-title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; flex: 1; }
+.hero-status { display: flex; align-items: center; gap: 10px; }
+/* 大状态词按增密要求 22→19，仍是面板视觉锚点 */
+.hero-state { font-size: 19px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; flex: 1; }
+.hero-timer {
+  font-size: 11px; color: var(--text2); font-variant-numeric: tabular-nums;
+  padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px;
+  background: rgba(0, 0, 0, 0.2); white-space: nowrap;
+}
+/* 波形开关就近原则：紧凑行放波形正下方右对齐（从「外观」卡迁入） */
+.hero-wave-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.hero-wave-row label { font-size: 11px; color: var(--text2); cursor: pointer; user-select: none; }
+/* 实时波形条：面板内动画（不受叠层零动画红线约束，那条红线只在 content.ts 叠层） */
+.wave { display: block; width: 100%; height: 28px; border-radius: 8px; background: rgba(0, 0, 0, 0.18); }
+
+/* —— 三段式分段控件（叠层外观模式）—— */
+.seg-row {
+  display: flex; gap: 4px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+}
+.seg {
+  flex: 1; min-width: 0; padding: 6px 0;
+  border: none; border-radius: 8px; background: transparent; color: var(--text2);
+  font: 400 11px/1 system-ui, sans-serif; cursor: pointer;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.seg:hover { color: var(--text); }
+.seg:active { transform: scale(0.96); }
+.seg.active { background: var(--accent); color: #fff; }
+.seg-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   background: #555; transition: background 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
 }
-.status-dot.Running { background: var(--green); box-shadow: 0 0 6px rgba(52,199,89,0.6); }
+.hero .status-dot { width: 12px; height: 12px; }
+/* 运行中呼吸：box-shadow 双色标关键帧做扩散/收敛，alternate 往返即呼吸 */
+@keyframes dotBreathe {
+  from { box-shadow: 0 0 3px rgba(52, 199, 89, 0.4); }
+  to { box-shadow: 0 0 9px rgba(52, 199, 89, 0.85); }
+}
+.status-dot.Running { background: var(--green); animation: dotBreathe 2s ease-in-out infinite alternate; }
 .status-dot.Stopped { background: var(--red); }
 
 /* Buttons row */
 .controls { display: flex; gap: 6px; }
 .btn {
   flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
-  padding: 8px 0; border: none; border-radius: var(--radius);
-  font: 500 12px/1 system-ui, sans-serif; cursor: pointer;
+  /* 坑：用户反馈按钮太抢 Hero 卡的戏——整体收敛一档（padding 8→6、字号 12→11、
+     圆角脱离 var(--radius)14 改固定 10px），与增密后的行高匹配 */
+  padding: 6px 0; border: none; border-radius: 10px;
+  font: 500 11px/1 system-ui, sans-serif; cursor: pointer;
   transition: transform 120ms var(--ease-out), opacity 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
   -webkit-font-smoothing: antialiased;
 }
 .btn:active { transform: scale(0.96); }
 .btn:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
-.btn svg { width: 14px; height: 14px; flex-shrink: 0; }
-#btnStart { background: var(--green); color: #fff; }
+.btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+/* 主按钮走主题 accent（含 hover 光晕），Stop 保持语义红 */
+#btnStart { background: var(--accent); color: #fff; }
 #btnStop { background: var(--red); color: #fff; }
 @media (hover: hover) and (pointer: fine) {
-  #btnStart:hover { box-shadow: 0 0 12px rgba(52,199,89,0.3); }
+  #btnStart:hover { box-shadow: 0 0 12px var(--accent-glow); }
   #btnStop:hover { box-shadow: 0 0 12px rgba(255,59,48,0.3); }
 }
 
+/* —— Bento 分组卡 —— */
+.card {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface);
+}
+
 /* Sections */
-.section { display: flex; flex-direction: column; gap: 6px; }
+.section { display: flex; flex-direction: column; gap: 5px; }
 .section-label { font-size: 11px; font-weight: 500; color: var(--text2); letter-spacing: 0.02em; text-transform: uppercase; }
+.card > .section-label + .section-label:not(:first-child),
+.card .sub-gap { margin-top: 4px; }
+/* 小节标题行：标题 + 可选 ?帮助气泡 同排对齐 */
+.label-row { display: flex; align-items: center; gap: 6px; }
 
 /* Select */
 .select-wrap { position: relative; }
@@ -115,29 +182,53 @@ body {
   width: 14px; height: 14px; color: var(--text2); pointer-events: none;
 }
 
-/* Divider */
-.divider { height: 1px; background: var(--border); margin: 0; }
-
 /* Row */
-.row { display: flex; align-items: center; gap: 8px; }
-.row label { font-size: 13px; cursor: pointer; user-select: none; }
+.row { display: flex; align-items: center; gap: 6px; }
+.row label { font-size: 12px; cursor: pointer; user-select: none; }
 .row .note { font-size: 10px; color: var(--text2); margin-left: 4px; opacity: 0.7; }
+/* iOS 风格自绘开关：appearance:none 让 checkbox 本体充当轨道、::after 充当滑块。
+   坑：不能换成 div/span 自绘——必须保留 <input type=checkbox> 原生语义层，
+   键盘空格切换、label for 关联、onchange 全部照旧，五个开关的业务逻辑零改动。 */
 .row input[type="checkbox"] {
-  width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;
-  transition: transform 120ms var(--ease-out);
+  -webkit-appearance: none; appearance: none;
+  width: 44px; height: 24px; flex-shrink: 0; margin: 0; position: relative;
+  border-radius: 999px; background: var(--surface-hover); border: 1px solid var(--border);
+  cursor: pointer; outline: none;
+  transition: background 200ms var(--ease-out), border-color 200ms var(--ease-out);
 }
-.row input[type="checkbox"]:active { transform: scale(0.9); }
+.row input[type="checkbox"]::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 18px; height: 18px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  /* 弹性小滑块：位移走 ease-out，按压时用宽度拉伸制造"果冻"回弹感 */
+  transition: transform 220ms var(--ease-out), width 120ms var(--ease-out);
+}
+/* 选中态引主题 accent（随色板切换），不再写死绿色 */
+.row input[type="checkbox"]:checked { background: var(--accent); border-color: transparent; }
+.row input[type="checkbox"]:checked::after { transform: translateX(20px); }
+.row input[type="checkbox"]:active::after { width: 21px; }
+.row input[type="checkbox"]:checked:active::after { transform: translateX(17px); }
+/* 紧凑版开关（波形就近行专用）：36×20 轨道+14 滑块，行程同步缩放 */
+.row input[type="checkbox"].toggle-sm { width: 36px; height: 20px; }
+.row input[type="checkbox"].toggle-sm::after { width: 14px; height: 14px; }
+.row input[type="checkbox"].toggle-sm:checked::after { transform: translateX(16px); }
+.row input[type="checkbox"].toggle-sm:checked:active::after { transform: translateX(13px); }
 
 /* Icon button */
 .icon-btn {
-  display: flex; align-items: center; gap: 4px; padding: 4px 10px;
+  display: flex; align-items: center; gap: 4px;
+  /* 坑：与 .btn 同批收敛（4×10→3×8），视觉重量随整体增密下调 */
+  padding: 3px 8px;
   border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--surface); color: var(--text2); font: 400 11px/1 system-ui, sans-serif;
-  cursor: pointer; transition: transform 120ms var(--ease-out), background 150ms var(--ease-out), border-color 150ms var(--ease-out);
+  cursor: pointer;
+  /* 坑：opacity 必须显式进 transition 列表——禁用态切换 opacity 时若无此属性会硬跳变 */
+  transition: transform 120ms var(--ease-out), background 150ms var(--ease-out), border-color 150ms var(--ease-out), opacity 200ms var(--ease-out);
   -webkit-font-smoothing: antialiased; white-space: nowrap;
 }
 .icon-btn:active { transform: scale(0.96); }
 .icon-btn:hover { background: var(--surface-hover); border-color: rgba(255,255,255,0.15); }
+.icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .icon-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
 .lang-switch { font-weight: 600; min-width: 32px; justify-content: center; }
 
@@ -151,14 +242,15 @@ body {
   transition: color 150ms var(--ease-out), background 150ms var(--ease-out), transform 120ms var(--ease-out);
 }
 .help-btn:hover { color: var(--text); background: var(--surface); }
-.help-btn:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 1px; color: var(--text); }
 .help-btn:active { transform: scale(0.9); }
 .help-btn svg { width: 14px; height: 14px; pointer-events: none; }
 .help-tip {
   position: absolute;
-  /* 坑：popup 视口仅 340px 宽，气泡必须向上弹出且向右展开（left 锚定）——
-     向下弹会在页面底部撑出滚动条，居中/右锚定会溢出左/右边缘被窗口裁掉。
-     所有 ? 图标都位于行内左侧（x≈100~160px），210px 宽度最右也只到 ~340px 内。 */
+  /* 坑：popup 视口 380px（原 340，加宽后重推演），气泡必须向上弹出且向右展开
+     （left 锚定）——向下弹会在页面底部撑出滚动条，居中/右锚定会溢出边缘被窗口裁掉。
+     加宽后内容区 352px（380-2×14），所有 ? 图标仍在行内左侧（x≈100~165px），
+     最右图标 165-8+210=367 < 380，210px 限宽依然安全且余量更大；若日后把 ? 图标
+     移到行尾右侧，须改用 right 锚定变体。 */
   bottom: calc(100% + 6px);
   left: -8px;
   z-index: 30;
@@ -173,7 +265,10 @@ body {
   text-align: left; white-space: normal;
   opacity: 0; visibility: hidden; pointer-events: none;
   transform: translateY(4px);
-  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out), visibility 0s linear 160ms;
+  /* 坑：退出比进入快（100ms vs 160ms）——隐藏态的 transition 声明决定退出动画，
+     进入态在下方 hover/focus 规则里单独声明 160ms；visibility 延迟必须与
+     退出时长一致，否则气泡先消失后淡出或淡出后被裁剪 */
+  transition: opacity 100ms var(--ease-out), transform 100ms var(--ease-out), visibility 0s linear 100ms;
 }
 /* 气泡小箭头：旋转方块借 inherit 底色 + 同色描边，与气泡边框对齐 */
 .help-tip::after {
@@ -184,11 +279,35 @@ body {
   transform: rotate(45deg);
   border-bottom-right-radius: 2px;
 }
-/* 键盘可达性：Tab 聚焦到 ? 按钮时同样显示气泡 */
+/* 坑：靠近面板顶部的 ? 气泡若仍向上弹会超出 popup 视口上边缘被裁掉——
+   .flip 变体改为向下弹出：bottom 改 auto、箭头(::after)翻到气泡顶边且只描左上两边 */
+.help-tip.flip {
+  bottom: auto; top: calc(100% + 6px);
+  transform: translateY(-4px);
+  transition: opacity 100ms var(--ease-out), transform 100ms var(--ease-out), visibility 0s linear 100ms;
+}
+.help-tip.flip::after {
+  top: -4px;
+  border-right: none; border-bottom: none;
+  border-left: 1px solid var(--border); border-top: 1px solid var(--border);
+}
+/* 坑：右锚定变体——波形开关行是 justify-content:flex-end，? 图标贴着面板右缘，
+   默认 left:-8px+210px 限宽会把 body 的 scrollWidth 撑过 380px，产生横向溢出
+   （右侧黑边）。改为 right:-8px 向左展开；箭头 ::after 同步镜像到气泡右下角。
+   注意隐藏态是 opacity+visibility（仍参与 scrollWidth 计算），不能靠藏起来躲，
+   必须锚定方向本身不溢出。 */
+.help-tip.anchor-right { left: auto; right: -8px; }
+.help-tip.anchor-right::after { left: auto; right: 14px; }
+.help-wrap:hover .help-tip.flip,
+.help-wrap:focus-within .help-tip.flip {
+  opacity: 1; visibility: visible; transform: translateY(0);
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out), visibility 0s;
+}
+/* 键盘可达性：Tab 聚焦到 ? 按钮时同样显示气泡；进入动画保持 160ms（退出 100ms） */
 .help-wrap:hover .help-tip,
 .help-wrap:focus-within .help-tip {
   opacity: 1; visibility: visible; transform: translateY(0);
-  transition-delay: 0s;
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out), visibility 0s;
 }
 
 /* Slider group */
@@ -234,7 +353,29 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 }
 .transcript-entry { padding: 6px 0; color: var(--text); }
 .transcript-entry + .transcript-entry { border-top: 1px solid var(--border); }
-.transcript-empty { color: var(--text2); font-style: italic; font-size: 11px; }
+/* 时间戳：等宽小号淡色，随行显示（检索过滤态同样保留） */
+.transcript-entry .entry-ts {
+  font-family: ui-monospace, Consolas, 'Courier New', monospace;
+  font-size: 10px; color: var(--text2); margin-right: 2px;
+}
+/* 空态：图标+主句+提示语垂直居中；search 无命中复用同一容器样式（无 small） */
+.transcript-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 5px; padding: 16px 8px 10px; text-align: center;
+  color: var(--text2); font-size: 11px;
+}
+.transcript-empty svg { width: 20px; height: 20px; opacity: 0.55; }
+.transcript-empty small { font-size: 10px; opacity: 0.75; }
+
+/* 自定义滚动条：窄轨半透明圆角，hover 加深（仅 Webkit，MV3 目标环境足够） */
+.preview::-webkit-scrollbar, .transcript-box::-webkit-scrollbar { width: 6px; }
+.preview::-webkit-scrollbar-track, .transcript-box::-webkit-scrollbar-track { background: transparent; }
+.preview::-webkit-scrollbar-thumb, .transcript-box::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18); border-radius: 3px;
+}
+.preview::-webkit-scrollbar-thumb:hover, .transcript-box::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
 
 /* Transcript search */
 /* 坑：清空按钮默认 display:none，由 JS 按"输入框是否有内容"切 display——
@@ -263,8 +404,8 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 .search-clear:active { transform: scale(0.9); }
 .search-clear svg { width: 10px; height: 10px; pointer-events: none; }
 .transcript-entry mark {
-  /* 坑：mark 默认黄底黑字，在深色主题下刺眼；用 accent 半透明底+继承文字色做高亮 */
-  background: rgba(94, 158, 255, 0.35); color: inherit;
+  /* 坑：mark 默认黄底黑字，在深色主题下刺眼；用主题 accent 半透明底做高亮（随色板联动） */
+  background: var(--accent-dim); color: inherit;
   border-radius: 3px; padding: 0 1px;
 }
 .disclaimer { font-size: 10px; color: var(--text2); text-align: center; line-height: 1.3; }
@@ -279,15 +420,54 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
   transition: color 200ms var(--ease-out);
 }
 
+/* —— 主题色板选择器 —— */
+.theme-row { display: flex; gap: 6px; }
+.swatch {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 8px 0 6px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); cursor: pointer;
+  transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out), transform 120ms var(--ease-out), box-shadow 150ms var(--ease-out);
+}
+.swatch:hover { background: var(--surface-hover); }
+.swatch:active { transform: scale(0.95); }
+/* 每个按钮自带 --swatch-color（内联），选中环与色卡同色，无需按主题写死五套规则 */
+.swatch.active {
+  border-color: var(--swatch-color);
+  box-shadow: inset 0 0 0 1px var(--swatch-color), 0 0 8px var(--swatch-color);
+}
+.swatch .chip {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--swatch-color);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.swatch-name { font-size: 9px; color: var(--text2); line-height: 1; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+/* 统一键盘焦点环：所有可交互元素一套规格（1.5px accent + offset），
+   range 基础规则的 outline:none 特异性低于带 :focus-visible 的选择器，此处可正常覆盖 */
+.btn:focus-visible, .icon-btn:focus-visible, .help-btn:focus-visible,
+.search-clear:focus-visible, .swatch:focus-visible,
+.row input[type="checkbox"]:focus-visible, input[type="range"]:focus-visible {
+  outline: 1.5px solid var(--accent); outline-offset: 2px; border-radius: 6px;
+}
+.row input[type="checkbox"]:focus-visible { border-radius: 999px; }
+.swatch:focus-visible { border-radius: 10px; }
+/* 搜索框焦点画在容器上（内部 input 已去 outline），负 offset 贴边不外扩 */
+.search-wrap:focus-within {
+  outline: 1.5px solid var(--accent); outline-offset: -1px;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .btn, .icon-btn, .help-btn, .help-tip, .container > *, .status-dot,
+  .btn, .icon-btn, .help-btn, .help-tip, .container > *, .status-dot, .hero, .swatch, .seg,
   input[type="range"], input[type="range"]::-webkit-slider-thumb,
+  .row input[type="checkbox"], .row input[type="checkbox"]::after,
   .preview .sentence, .status-bar, .model-info,
   .transcript-box, .disclaimer {
     transition: none !important; animation: none !important;
   }
-  .btn:active, .icon-btn:active, .help-btn:active { transform: none; }
+  /* 呼吸灯属 animation，上面的 animation:none 已覆盖 .status-dot.Running；
+     波形条是 canvas 绘制不走 CSS，由 popup.ts 按 matchMedia 改为事件驱动重绘 */
+  .btn:active, .icon-btn:active, .help-btn:active, .swatch:active, .seg:active { transform: none; }
   .container > * { opacity: 1; transform: none; }
 }
 </style>
@@ -295,14 +475,35 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 <body>
 <div class="container">
 
-  <div class="header">
-    <img src="logo.jpg" style="width:22px;height:22px;border-radius:6px;flex-shrink:0;">
-    <span class="status-dot Stopped" id="statusDot"></span>
-    <span class="title" id="appTitle">易字幕 开发版本</span>
-    <a href="https://github.com/huchangzhi/easysub" target="_blank" style="display:flex;color:var(--text2);text-decoration:none;" title="GitHub">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
-    </a>
-    <button id="btnLang" class="icon-btn lang-switch">EN</button>
+  <!-- —— A. 状态 Hero 卡：大状态词 + 会话计时 + 呼吸灯 —— -->
+  <div class="hero Stopped" id="heroCard">
+    <div class="hero-top">
+      <img src="logo.jpg" style="width:22px;height:22px;border-radius:6px;flex-shrink:0;">
+      <span class="hero-title" id="appTitle">易字幕 开发版本</span>
+      <a href="https://github.com/huchangzhi/easysub" target="_blank" style="display:flex;color:var(--text2);text-decoration:none;" title="GitHub">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+      </a>
+      <button id="btnLang" class="icon-btn lang-switch">EN</button>
+    </div>
+    <div class="hero-status">
+      <span class="status-dot Stopped" id="statusDot"></span>
+      <span class="hero-state" id="statusWord">待命</span>
+      <span class="hero-timer" id="sessionTimer">00:00</span>
+    </div>
+    <!-- 实时波形条：仅面板打开且 Running 时 rAF 重绘；canvas 宽度由 JS 按容器实际宽×dpr 设置 -->
+    <canvas id="waveCanvas" class="wave" aria-hidden="true"></canvas>
+    <!-- 坑：波形开关必须紧贴波形（用户实测"开关离波形太远"），从「外观」卡迁入 Hero；
+         用 toggle-sm 紧凑档+右对齐小字，避免喧宾夺主。onchange 逻辑零改动。 -->
+    <div class="row hero-wave-row">
+      <label for="chkWaveform" id="showWaveform">波形显示</label>
+      <input type="checkbox" id="chkWaveform" class="toggle-sm" checked>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnWaveform" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipWaveform">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipWaveform">在顶部 Hero 卡内实时显示音量电平波形（左端更早、右端最新）。仅面板打开且识别运行时渲染，关面板即停、无后台开销；关闭后显示静止基线。</span>
+      </span>
+    </div>
   </div>
 
   <div class="controls">
@@ -316,81 +517,14 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
     </button>
   </div>
 
-  <div class="section">
+  <!-- —— B1. Bento 卡「识别」：音频来源 + 流式标点 + 端点滑杆 + 模型信息 —— -->
+  <div class="card">
     <span class="section-label" id="audioSource">音频来源</span>
     <div class="select-wrap">
       <div class="static-mode" id="sourceDesc">从当前标签页识别字幕</div>
     </div>
-  </div>
 
-  <div class="divider"></div>
-
-  <div class="section">
-    <span class="section-label" id="secDisplay">显示</span>
-    <div class="row">
-      <input type="checkbox" id="chkOverlay" checked>
-      <label for="chkOverlay" id="showSubtitles">显示字幕</label>
-      <button id="btnLock" class="icon-btn" style="margin-left:auto;">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg>
-        <span id="lockLabel">锁定</span>
-      </button>
-      <button id="btnResetOverlay" class="icon-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.5 15.5a9 9 0 1 0 2.12-9.36L1 10"/></svg>
-        <span id="resetOverlayLabel">重置位置</span>
-      </button>
-    </div>
-    <div class="row">
-      <span class="slider-label" id="fontLabel">字体大小</span>
-      <input type="range" id="fontSizeSlider" min="18" max="72" value="36">
-      <span class="slider-value" id="fontSizeLabel">36</span>
-    </div>
-    <div class="row">
-      <input type="checkbox" id="chkLatency" checked>
-      <label for="chkLatency" id="showLatency">延迟指示</label>
-      <span class="help-wrap">
-        <button type="button" id="helpBtnLatency" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipLatency">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        </button>
-        <span class="help-tip" role="tooltip" id="helpTipLatency">在字幕叠层右下角显示当前识别延迟（如 1.2s）。约每 2 秒更新一次文本，开销可忽略；不需要时可关闭以保持画面纯净。</span>
-      </span>
-    </div>
-  </div>
-
-  <div class="divider"></div>
-
-  <div class="section">
-    <span class="section-label" id="secPrev">上一句</span>
-    <div class="row">
-      <input type="checkbox" id="chkShowPrev" checked>
-      <label for="chkShowPrev" id="showPrev">显示上一句</label>
-      <span class="help-wrap">
-        <button type="button" id="helpBtnPrev" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipPrev">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        </button>
-        <span class="help-tip" role="tooltip" id="helpTipPrev">在画面上额外显示上一条已完成的句子，方便回看刚说过的内容；透明度越低上一句越淡，越不遮挡画面。</span>
-      </span>
-      <span class="slider-group">
-        <span class="slider-label" id="prevOpacity">透明度</span>
-        <input type="range" id="prevOpacitySlider" min="5" max="100" value="35">
-        <span class="slider-value" id="prevOpacityLabel">35</span>
-      </span>
-    </div>
-    <div class="row">
-      <input type="checkbox" id="chkLookback" checked>
-      <label for="chkLookback" id="showLookback">近句回看</label>
-      <span class="help-wrap">
-        <button type="button" id="helpBtnLookback" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipLookback">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        </button>
-        <span class="help-tip" role="tooltip" id="helpTipLookback">在字幕叠层中保留最近几句已完成的内容供回看。仅用定容内存缓冲保存文本，无定时器、无轮询，零常驻开销。</span>
-      </span>
-    </div>
-  </div>
-
-  <div class="divider"></div>
-
-  <div class="section">
-    <span class="section-label" id="secPunct">标点/断句</span>
+    <span class="section-label sub-gap" id="secPunct">标点/断句</span>
     <div class="row">
       <input type="checkbox" id="chkPunct" checked>
       <label for="chkPunct" id="showPunct">流式标点添加</label>
@@ -446,24 +580,81 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
         <span id="resetEndpointLabel">默认</span>
       </button>
     </div>
+    <span class="model-info" id="modelInfo">Zipformer · 中英双语 · 离线</span>
   </div>
 
-  <div class="divider"></div>
+  <!-- —— B2. Bento 卡「字幕显示」：显示开关/字号 + 上一句/透明度 + 回看与延迟指示 —— -->
+  <div class="card">
+    <span class="section-label" id="secDisplay">显示</span>
+    <div class="row">
+      <input type="checkbox" id="chkOverlay" checked>
+      <label for="chkOverlay" id="showSubtitles">显示字幕</label>
+      <button id="btnLock" class="icon-btn" style="margin-left:auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg>
+        <span id="lockLabel">锁定</span>
+      </button>
+      <button id="btnResetOverlay" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.5 15.5a9 9 0 1 0 2.12-9.36L1 10"/></svg>
+        <span id="resetOverlayLabel">重置位置</span>
+      </button>
+    </div>
+    <div class="row">
+      <span class="slider-label" id="fontLabel">字体大小</span>
+      <input type="range" id="fontSizeSlider" min="18" max="72" value="36">
+      <span class="slider-value" id="fontSizeLabel">36</span>
+    </div>
+    <div class="row">
+      <input type="checkbox" id="chkLatency" checked>
+      <label for="chkLatency" id="showLatency">延迟指示</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnLatency" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipLatency">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipLatency">在字幕叠层右下角显示当前识别延迟（如 1.2s）。约每 2 秒更新一次文本，开销可忽略；不需要时可关闭以保持画面纯净。</span>
+      </span>
+    </div>
 
-  <div class="model-info" id="modelInfo">Zipformer · 中英双语 · 离线</div>
-
-  <div class="divider"></div>
-
-  <div class="preview" id="textPreview">
-    <div class="current-text" id="readyText">就绪</div>
+    <span class="section-label sub-gap" id="secPrev">上一句</span>
+    <div class="row">
+      <input type="checkbox" id="chkShowPrev" checked>
+      <label for="chkShowPrev" id="showPrev">显示上一句</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnPrev" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipPrev">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipPrev">在画面上额外显示上一条已完成的句子，方便回看刚说过的内容；透明度越低上一句越淡，越不遮挡画面。</span>
+      </span>
+      <span class="slider-group">
+        <span class="slider-label" id="prevOpacity">透明度</span>
+        <input type="range" id="prevOpacitySlider" min="5" max="100" value="35">
+        <span class="slider-value" id="prevOpacityLabel">35</span>
+      </span>
+    </div>
+    <div class="row">
+      <input type="checkbox" id="chkLookback" checked>
+      <label for="chkLookback" id="showLookback">近句回看</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnLookback" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipLookback">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipLookback">点击字幕窗左上角的小箭头展开近句回看：最新一句排在最上面，越往下越早。仅存内存不落地，零常驻开销。</span>
+      </span>
+    </div>
   </div>
 
-  <div class="status-bar" id="modelStatus"></div>
-
-  <div class="divider"></div>
-
-  <div class="section" id="transcriptSection">
+  <!-- —— B3. Bento 卡「历史记录」：检索 + 转写列表 + 复制/清空 —— -->
+  <div class="card" id="transcriptSection">
     <span class="section-label" id="transcriptLabel">字幕记录</span>
+    <div class="row">
+      <input type="checkbox" id="chkShowTs" checked>
+      <label for="chkShowTs" id="showTimestamps">显示时间戳</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnTimestamps" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipTimestamps">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipTimestamps">在每句前显示 [分:秒] 时标，表示相对本次会话第一句的偏移；旧版本记录的句子没有时标信息，只显示纯文本。</span>
+      </span>
+    </div>
     <div class="search-wrap">
       <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <input type="text" id="searchInput" placeholder="搜索历史字幕…" autocomplete="off" spellcheck="false" aria-label="搜索历史字幕">
@@ -486,6 +677,60 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
       </button>
     </div>
   </div>
+
+  <!-- —— C. 外观：accent 主题色板选择器（5 套，chip 内联 --swatch-color 预览） —— -->
+  <div class="card">
+    <div class="label-row">
+      <span class="section-label" id="appearanceLabel">外观</span>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnAppearance" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipAppearance">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipAppearance">更换面板强调色：影响开关选中态、滑杆填充、主按钮与命中高亮等控件配色，选择自动保存。</span>
+      </span>
+    </div>
+    <div class="theme-row" role="radiogroup" aria-labelledby="appearanceLabel">
+      <button type="button" class="swatch active" data-theme="cyan" role="radio" aria-checked="true" style="--swatch-color:#5e9eff;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeCyan">青蓝</span>
+      </button>
+      <button type="button" class="swatch" data-theme="emerald" role="radio" aria-checked="false" style="--swatch-color:#34d399;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeEmerald">翡翠绿</span>
+      </button>
+      <button type="button" class="swatch" data-theme="violet" role="radio" aria-checked="false" style="--swatch-color:#a78bfa;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeViolet">紫罗兰</span>
+      </button>
+      <button type="button" class="swatch" data-theme="amber" role="radio" aria-checked="false" style="--swatch-color:#fbbf24;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeAmber">琥珀金</span>
+      </button>
+      <button type="button" class="swatch" data-theme="rose" role="radio" aria-checked="false" style="--swatch-color:#fb7185;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeRose">玫瑰红</span>
+      </button>
+    </div>
+
+    <div class="label-row sub-gap">
+      <span class="section-label" id="overlayBgLabel">叠层外观</span>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnOverlayBg" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipOverlayBg">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipOverlayBg">字幕叠层的背景样式：毛玻璃=半透明模糊底；纯色=不透明深色底；描边=无底色、仅文字描边。切换即时生效。</span>
+      </span>
+    </div>
+    <!-- 三段式分段控件：字幕叠层背景模式，切换经 PREFS_PATCH 即时下发 content -->
+    <div class="seg-row" role="radiogroup" aria-labelledby="overlayBgLabel">
+      <button type="button" class="seg active" data-bgmode="glass" role="radio" aria-checked="true"><span class="seg-name" data-key="overlayBgGlass">毛玻璃</span></button>
+      <button type="button" class="seg" data-bgmode="solid" role="radio" aria-checked="false"><span class="seg-name" data-key="overlayBgSolid">纯色</span></button>
+      <button type="button" class="seg" data-bgmode="outline" role="radio" aria-checked="false"><span class="seg-name" data-key="overlayBgOutline">描边</span></button>
+    </div>
+    <!-- 坑：波形开关已就近迁入 Hero 卡（canvas 正下方），此处不得再留副本——
+          重复 id 会让 getElementById 只命中前者、label/aria 关系错乱 -->
+  </div>
+
+  <div class="preview" id="textPreview">
+    <div class="current-text" id="readyText">就绪</div>
+  </div>
+
+  <div class="status-bar" id="modelStatus"></div>
 
   <div class="disclaimer" id="disclaimer">字幕由模型识别，不保证准确</div>
 </div>

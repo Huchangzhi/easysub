@@ -28,6 +28,10 @@ let _lang = 'zh_CN'; // 供回看把手 aria-label 等 UI 文案取词
 // 这里只合并内存并即时生效；持久化归 popup 的 savePrefs，content 不回写以免竞争其读改写。
 let _lookbackEnabled = true;
 let _latencyEnabled = true;
+// —— 叠层外观三模式（tmspeech_prefs.overlayBgMode，默认 'glass' 兼容老用户）——
+type OverlayBgMode = 'glass' | 'solid' | 'outline';
+const BG_MODES: OverlayBgMode[] = ['glass', 'solid', 'outline'];
+let _overlayBgMode: OverlayBgMode = 'glass';
 // —— 延迟指示器 ——
 // 颜色阈值（调整入口）：绿=优秀 <LATENCY_LOW_MS；黄=中 LOW–HIGH；红=高 >HIGH。改这里即可全局生效。
 const LATENCY_LOW_MS = 200;
@@ -99,6 +103,11 @@ function create() {
   s.left = '50%';
   s.top = '50%';
   s.transform = 'translate(-50%, -50%)';
+  // 坑：上面内联样式写死的是 glass 观感，而 paintOverlayChrome 此前只在下方异步
+  // storage 回调里才跑——solid/outline 用户每次创建叠层都会先闪一帧旧毛玻璃再切换。
+  // 同步体内按当前 _overlayBgMode 立即重涂一次（函数声明提升，可直接调用）；
+  // 异步回调读到的 prefs 若不同会再次覆盖，最终值不受影响
+  paintOverlayChrome();
 
   chrome.storage.local.get('tmspeech_locked').then(r => {
     if (r.tmspeech_locked) { _locked = true; applyLock(); }
@@ -111,7 +120,11 @@ function create() {
     // 初始开关值：与 popup 的 PREFS_PATCH 推送同源（tmspeech_prefs），默认 true
     _lookbackEnabled = prefs.lookbackEnabled !== false;
     _latencyEnabled = prefs.latencyIndicatorEnabled !== false;
+    // 外观模式初始值（默认 'glass' 兼容老用户；非法值一律回退 glass）
+    const bgMode = prefs.overlayBgMode as OverlayBgMode;
+    if (BG_MODES.includes(bgMode)) _overlayBgMode = bgMode;
     applyFeatureToggles();
+    paintOverlayChrome();
   });
 
   prevEl = document.createElement('div');
@@ -121,7 +134,8 @@ function create() {
     _lang = (r['tmspeech_lang'] as string) || 'zh_CN';
     const lang = (r['tmspeech_lang'] as string) || 'zh_CN';
     const fs = prefs.fontSize || 36;
-    const baseStyle = `color:#fff;font-size:${fs}px;font-weight:600;line-height:1.4;text-shadow:0 1px 10px rgba(0,0,0,0.8);word-break:break-word;`;
+    // 字幕文字阴影随外观模式走：outline 模式靠多向描边阴影保证任意背景可读
+    const baseStyle = `color:#fff;font-size:${fs}px;font-weight:600;line-height:1.4;text-shadow:${subtitleShadow()};word-break:break-word;`;
     if (prevEl) {
       prevEl.style.cssText = baseStyle;
       prevEl.style.display = 'none';
@@ -364,6 +378,73 @@ function applyFeatureToggles() {
   if (!_latencyEnabled && latencyWrap) teardownLatency();
 }
 
+// —— 叠层外观三模式（solid / glass / outline）——
+// 字幕文字阴影按模式取值：outline 靠四向+纵向描边阴影保证任意背景下可读，
+// 其余模式用常规投影。集中在此，create() 的 baseStyle 与模式切换共用一份定义。
+function subtitleShadow(): string {
+  if (_overlayBgMode === 'outline') {
+    // 极简模式：多向硬描边模拟 1px 描边 + 纵向柔和投影兜底
+    return [
+      '-2px -2px 3px rgba(0,0,0,0.9)', '2px -2px 3px rgba(0,0,0,0.9)',
+      '-2px 2px 3px rgba(0,0,0,0.9)', '2px 2px 3px rgba(0,0,0,0.9)',
+      '0 2px 8px rgba(0,0,0,0.85)',
+    ].join(',');
+  }
+  return '0 1px 10px rgba(0,0,0,0.8)';
+}
+
+// 叠层"外壳"视觉（背景/毛玻璃/边框/阴影/文字描边）的唯一绘制出口。
+// 坑：所有相关属性必须成对设置——background/backdropFilter/-webkit-backdropFilter/
+// boxShadow/border 在每个分支都要给全量值，切换模式时不得残留上一模式的单边属性
+// （-webkit- 前缀不随标准属性联动，漏一个就出现半透明残影）。
+// 坑：锁定态的外壳由 applyLock 独占（transparent/none），本函数在锁定时必须让位——
+// 否则 prefs 异步到达/PREFS_PATCH 切换会把已锁定的透明外壳重新涂回有色背景，
+// 造成"锁定后仍有半透明背景"的老毛病复发。解锁恢复时 applyLock 会回调本函数重涂。
+function paintOverlayChrome() {
+  if (!overlay || _locked) return;
+  const s = overlay.style;
+  switch (_overlayBgMode) {
+    case 'solid':
+      // 纯色底块：可读性优先，近不透明深色圆角块；无毛玻璃（backdropFilter 关闭）
+      s.background = 'rgba(12,12,18,0.96)';
+      s.backdropFilter = 'none';
+      (s as any).webkitBackdropFilter = 'none';
+      s.boxShadow = '0 8px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06)';
+      s.border = '1px solid rgba(255,255,255,0.1)';
+      break;
+    case 'outline':
+      // 极简：无背景无边框，可读性全部交给文字多向描边阴影
+      s.background = 'transparent';
+      s.backdropFilter = 'none';
+      (s as any).webkitBackdropFilter = 'none';
+      s.boxShadow = 'none';
+      s.border = 'none';
+      break;
+    case 'glass':
+    default:
+      // 毛玻璃：现状样式（默认），与 applyLock 解锁态的既有观感一致
+      s.background = 'rgba(0,0,0,0.25)';
+      s.backdropFilter = 'blur(4px)';
+      (s as any).webkitBackdropFilter = 'blur(4px)';
+      s.boxShadow = '0 0 0 1px rgba(255,255,255,0.03)';
+      s.border = '1px solid rgba(255,255,255,0.06)';
+      break;
+  }
+  // 文字描边随模式同步（prevEl/textEl 可能尚未建好，判空即可）
+  const shadow = `text-shadow:${subtitleShadow()};`;
+  for (const el of [prevEl, textEl]) {
+    if (!el) continue;
+    el.style.cssText = el.style.cssText.replace(/text-shadow:[^;]*;?/, shadow);
+  }
+}
+
+// 外部入口：切模式并立即重涂。零动画红线：纯静态样式替换，不引入任何 transition。
+function applyOverlayStyle(mode: OverlayBgMode) {
+  if (!BG_MODES.includes(mode)) return;
+  _overlayBgMode = mode;
+  paintOverlayChrome();
+}
+
 function addDragListeners() {
   if (!overlay) return;
 
@@ -467,11 +548,9 @@ function applyLock() {
   } else {
     overlay.style.pointerEvents = 'auto';
     lockBtn.style.pointerEvents = '';
-    overlay.style.background = 'rgba(0,0,0,0.25)';
-    overlay.style.backdropFilter = 'blur(4px)';
-    (overlay.style as any).webkitBackdropFilter = 'blur(4px)';
-    overlay.style.boxShadow = '0 0 0 1px rgba(255,255,255,0.03)';
-    overlay.style.border = '1px solid rgba(255,255,255,0.06)';
+    // 外壳（背景/毛玻璃/边框/阴影）交给 paintOverlayChrome 按当前外观模式重涂——
+    // 坑：这里若写死 glass 值，解锁瞬间会把 solid/outline 模式打回毛玻璃。
+    paintOverlayChrome();
     overlay.style.cursor = 'move';
     lockBtn.style.opacity = '';
   }
@@ -535,6 +614,8 @@ chrome.runtime.onMessage.addListener((msg) => {
       // 持久化由 popup 侧 savePrefs 负责，这里刻意不回写 storage，避免与其读改写竞争。
       if (typeof msg.lookbackEnabled === 'boolean') _lookbackEnabled = msg.lookbackEnabled;
       if (typeof msg.latencyIndicatorEnabled === 'boolean') _latencyEnabled = msg.latencyIndicatorEnabled;
+      // 外观模式即时切换：合法值经 applyOverlayStyle 重涂（内部校验+锁定让位）
+      if (typeof msg.overlayBgMode === 'string') applyOverlayStyle(msg.overlayBgMode as OverlayBgMode);
       applyFeatureToggles();
       break;
     }

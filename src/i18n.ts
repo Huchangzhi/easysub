@@ -23,9 +23,31 @@ const strings: Record<string, Record<string, string>> = {
     error: '错误',
     statusRunning: 'Running',
     statusStopped: 'Stopped',
+    // —— Hero 状态卡大状态词（待命=从未启动；已停止=启动过又停）——
+    stateReady: '待命',
+    // 用户实测措辞：「聆听中」改「识别中」（更贴近实际动作）
+    stateRunning: '识别中',
+    stateStopped: '已停止',
+    // —— 外观主题（C. 主题系统色板名）——
+    appearanceLabel: '外观',
+    themeCyan: '青蓝',
+    themeEmerald: '翡翠绿',
+    themeViolet: '紫罗兰',
+    themeAmber: '琥珀金',
+    themeRose: '玫瑰红',
+    // —— 叠层外观三模式 + 波形开关 ——
+    overlayBgLabel: '叠层外观',
+    overlayBgGlass: '毛玻璃',
+    overlayBgSolid: '纯色',
+    overlayBgOutline: '描边',
+    showWaveform: '波形显示',
+    // 括号写明时间方向：左=旧 右=新（与回看"上=新"互补，全面板排序语义均有文字说明）
+    helpWaveform: '在顶部 Hero 卡内实时显示音量电平波形（左端更早、右端最新）。仅面板打开且识别运行时渲染，关面板即停、无后台开销；关闭后显示静止基线。',
     langSwitch: 'EN',
     transcript: '字幕记录',
     transcriptEmpty: '暂无字幕',
+    // 空态第二行提示语（转写记录空态美化）；括号内写明排序方向，与全面板心智一致
+    transcriptHint: '开始识别后，完成的句子会自动记录在这里（最新的在最下方）',
     copy: '复制',
     copied: '已复制',
     clearTranscript: '清空',
@@ -55,9 +77,22 @@ const strings: Record<string, Record<string, string>> = {
     // 坑：{n} 是占位符不是模板语法，使用方必须手动 .replace('{n}', String(n))
     searchHits: '{n} 条命中',
     showLookback: '近句回看',
-    helpLookback: '在字幕叠层中保留最近几句已完成的内容供回看。仅用定容内存缓冲保存文本，无定时器、无轮询，零常驻开销。',
+    // 坑：文案必须写实——把手实际位于字幕窗左上角(content.ts top:6/left:6)，面板 unshift
+    // 渲染即最新在最上；措辞口语化一句话说清"去哪找+什么顺序"
+    helpLookback: '点击字幕窗左上角的小箭头展开近句回看：最新一句排在最上面，越往下越早。仅存内存不落地，零常驻开销。',
     showLatency: '延迟指示',
     helpLatency: '在字幕叠层右下角显示当前识别延迟（如 1.2s）。约每 2 秒更新一次文本，开销可忽略；不需要时可关闭以保持画面纯净。',
+    // 坑：无进行中会话时切换字幕开关的反馈文案（原内联双语，此批收编进 i18n）
+    overlaySavedOffline: '当前无进行中的识别，设置已保存，下次开始时生效',
+    // 坑：最后两处内联运行时文案的收编；{m} 是占位符不是模板语法，
+    // 使用方必须手动 .replace('{m}', String(msg.message))
+    noActiveTab: '没有找到活跃标签页',
+    errorPrefix: '错误：{m}',
+    // —— 时间戳开关 + 主题/三模式帮助（用户要求每个新增设置项都有 ? 气泡）——
+    showTimestamps: '显示时间戳',
+    helpTimestamps: '在每句前显示 [分:秒] 时标，表示相对本次会话第一句的偏移；旧版本记录的句子没有时标信息，只显示纯文本。',
+    helpAppearance: '更换面板强调色：影响开关选中态、滑杆填充、主按钮与命中高亮等控件配色，选择自动保存。',
+    helpOverlayBg: '字幕叠层的背景样式：毛玻璃=半透明模糊底；纯色=不透明深色底；描边=无底色、仅文字描边。切换即时生效。',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -83,9 +118,26 @@ const strings: Record<string, Record<string, string>> = {
     error: 'Error',
     statusRunning: 'Running',
     statusStopped: 'Stopped',
+    stateReady: 'Standby',
+    stateRunning: 'Recognizing',
+    stateStopped: 'Stopped',
+    appearanceLabel: 'Appearance',
+    themeCyan: 'Cyan Blue',
+    themeEmerald: 'Emerald',
+    themeViolet: 'Violet',
+    themeAmber: 'Amber',
+    themeRose: 'Rose',
+    overlayBgLabel: 'Overlay Style',
+    overlayBgGlass: 'Glass',
+    overlayBgSolid: 'Solid',
+    overlayBgOutline: 'Outline',
+    showWaveform: 'Waveform',
+    // 时间方向说明：左=旧 右=新（与回看"上=新"互补，全面板排序语义均有文字说明）
+    helpWaveform: 'Shows a live volume waveform in the hero card (older on the left, newest on the right). Renders only while the popup is open and recognition is running — no background cost; falls back to a static baseline when off.',
     langSwitch: '中',
     transcript: 'Transcript',
     transcriptEmpty: 'No subtitles yet',
+    transcriptHint: 'Finished sentences will appear here once recognition starts (newest at the bottom)',
     copy: 'Copy',
     copied: 'Copied',
     clearTranscript: 'Clear',
@@ -110,9 +162,16 @@ const strings: Record<string, Record<string, string>> = {
     searchNoMatch: 'No matching subtitles',
     searchHits: '{n} hit(s)',
     showLookback: 'Lookback',
-    helpLookback: 'Keeps the last few finished sentences visible in the subtitle overlay for review. Uses a fixed-capacity in-memory buffer only — no timers, no polling, zero standing cost.',
+    helpLookback: 'Click the small arrow at the top-left corner of the subtitle window to open lookback: the latest line is on top, the further down the older. Memory-only, zero standing cost.',
     showLatency: 'Latency',
     helpLatency: 'Shows the current recognition latency (e.g. 1.2s) at the bottom-right of the subtitle overlay. Updates about once every 2 seconds — negligible cost; turn off for a cleaner picture.',
+    overlaySavedOffline: 'No active session — saved, applies on next start',
+    noActiveTab: 'No active tab found',
+    errorPrefix: 'Error: {m}',
+    showTimestamps: 'Show Timestamps',
+    helpTimestamps: 'Shows an [mm:ss] offset before each line, relative to the first sentence of this session. Sentences recorded by older versions carry no timestamp and appear as plain text.',
+    helpAppearance: 'Changes the panel accent color used by toggles, slider fills, the primary button and highlights. Your choice is saved automatically.',
+    helpOverlayBg: 'Background style of the subtitle overlay: Glass = translucent blurred backdrop; Solid = opaque dark plate; Outline = no plate, outlined text only. Changes apply instantly.',
   },
 };
 
