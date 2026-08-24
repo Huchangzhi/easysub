@@ -113,6 +113,10 @@ async function applyLang() {
   $('helpTipTimestamps').textContent = tr('helpTimestamps');
   $('helpTipAppearance').textContent = tr('helpAppearance');
   $('helpTipOverlayBg').textContent = tr('helpOverlayBg');
+  $('bgSchemeLabel').textContent = tr('bgSchemeLabel');
+  $('helpTipBgScheme').textContent = tr('helpBgScheme');
+  $('showAnimations').textContent = tr('showAnimations');
+  $('helpTipAnimations').textContent = tr('helpAnimations');
   // Hero 大状态词也要跟随语言刷新（依据最近一次状态与是否启动过）
   statusWordEl.textContent = tSync(currentLang,
     lastStatus === 'Running' ? 'stateRunning' : (hasStarted ? 'stateStopped' : 'stateReady'));
@@ -144,6 +148,12 @@ async function loadPrefs() {
   // 叠层外观三模式（契约与 content.ts t18 对齐：glass 默认/solid/outline）
   const bm = BG_MODES.includes(prefs.overlayBgMode) ? prefs.overlayBgMode : 'glass';
   applyBgMode(bm);
+  // 背景风格四选一（白名单校验回退 obsidian）
+  const bs = BG_SCHEMES.includes(prefs.bgScheme) ? prefs.bgScheme : 'obsidian';
+  applyBgScheme(bs);
+  // 动效开关默认关（=== true 才开，与"用户要求默认关闭"对齐）；恢复即挂/摘 .anim
+  chkAnim.checked = prefs.animationsEnabled === true;
+  applyAnim();
   chkWaveform.checked = prefs.waveformEnabled !== false;
   updateWaveVisibility();
   // 时间戳显示默认开；切换只影响 popup 渲染，不进 FORWARD 链路
@@ -197,6 +207,40 @@ document.querySelectorAll<HTMLButtonElement>('.swatch').forEach(b => {
 // —— 叠层外观三模式（契约：overlayBgMode ∈ 'glass'|'solid'|'outline'，字段名勿改）——
 // 坑：与 content.ts t18 的 BG_MODES 白名单保持一致，新增模式要两处同步
 const BG_MODES = ['glass', 'solid', 'outline'];
+
+// —— 背景风格四选一（t28）：纯 popup 视觉，不进 FORWARD/PREFS_PATCH 链路 ——
+const BG_SCHEMES = ['obsidian', 'pitch', 'graphite', 'ember'];
+
+function applyBgScheme(scheme: string) {
+  document.body.dataset.bg = scheme;
+  document.querySelectorAll<HTMLButtonElement>('.bsg').forEach(b => {
+    const on = b.dataset.scheme === scheme;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', String(on));
+  });
+}
+
+document.querySelectorAll<HTMLButtonElement>('.bsg').forEach(b => {
+  b.onclick = () => {
+    const s = b.dataset.scheme!;
+    applyBgScheme(s);
+    savePrefs({ bgScheme: s });
+  };
+});
+
+// —— 动效开关（t28，animationsEnabled 默认关=false）：body.anim 门控呼吸+交错入场 ——
+const chkAnim = $('chkAnim') as HTMLInputElement;
+
+function applyAnim() {
+  // 坑：系统 prefers-reduced-motion 在 CSS 层用 !important 压过 .anim（层级最高），
+  // 这里无需读 matchMedia 双重判断，挂类即可
+  document.body.classList.toggle('anim', chkAnim.checked);
+}
+
+chkAnim.onchange = () => {
+  savePrefs({ animationsEnabled: chkAnim.checked });
+  applyAnim();
+};
 
 function applyBgMode(mode: string) {
   document.querySelectorAll<HTMLButtonElement>('.seg').forEach(b => {

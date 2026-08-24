@@ -8,60 +8,73 @@
 :root {
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --bg: rgba(26, 26, 38, 0.88);
-  --surface: rgba(255, 255, 255, 0.05);
-  --surface-hover: rgba(255, 255, 255, 0.1);
-  --border: rgba(255, 255, 255, 0.08);
+  /* Raycast 式表面阶梯（全部实底）：底色近黑微冷调 → 卡片 → hover → 输入/波形更深一档 */
+  --bg: #0f1014;
+  --surface: #16171c;
+  --surface-hover: #1d1e24;
+  --surface-input: #121318;
+  --border: rgba(255, 255, 255, 0.07);
   --text: rgba(255, 255, 255, 0.9);
   --text2: rgba(255, 255, 255, 0.5);
   --green: #34c759;
   --orange: #ff9500;
   --red: #ff3b30;
-  /* 坑：--accent 及派生色是主题系统的唯一取色口，控件一律引变量不得写死色值。
-     :root 只放默认主题(cyan)，其余主题在下方 body[data-theme=…] 覆盖。 */
-  --accent: #5e9eff;
-  --accent-dim: rgba(94, 158, 255, 0.35);
-  --accent-glow: rgba(94, 158, 255, 0.45);
-  --radius: 14px;
+  /* 坑：--accent 是主题系统唯一取色口，控件一律引变量。使用场合纪律（四处）：
+     主按钮 / 选中态(toggle·swatch·seg active) / 焦点环 / 波形当前柱——其余一律中性灰阶。
+     去 AI 味：glow 变量已删除；莫兰迪降饱和，暗底对比均 ≥4.5:1 */
+  --accent: #4c9ee8;
+  --accent-dim: rgba(76, 158, 232, 0.3);
+  --radius: 8px;
+  --radius-btn: 6px;
 }
-/* —— 主题系统：5 套色板，切 data-theme 即全局换装 —— */
-body[data-theme="emerald"] { --accent: #34d399; --accent-dim: rgba(52, 211, 153, 0.35); --accent-glow: rgba(52, 211, 153, 0.45); }
-body[data-theme="violet"]  { --accent: #a78bfa; --accent-dim: rgba(167, 139, 250, 0.35); --accent-glow: rgba(167, 139, 250, 0.45); }
-body[data-theme="amber"]   { --accent: #fbbf24; --accent-dim: rgba(251, 191, 36, 0.35); --accent-glow: rgba(251, 191, 36, 0.45); }
-body[data-theme="rose"]    { --accent: #fb7185; --accent-dim: rgba(251, 113, 133, 0.35); --accent-glow: rgba(251, 113, 133, 0.45); }
+/* —— 主题系统：5 套色板，切 data-theme 即全局换装（保留选择权，全部降饱和） —— */
+body[data-theme="emerald"] { --accent: #3fae8c; --accent-dim: rgba(63, 174, 140, 0.3); }
+body[data-theme="violet"]  { --accent: #9086cf; --accent-dim: rgba(144, 134, 207, 0.3); }
+body[data-theme="amber"]   { --accent: #cba53f; --accent-dim: rgba(203, 165, 63, 0.3); }
+body[data-theme="rose"]    { --accent: #cd7382; --accent-dim: rgba(205, 115, 130, 0.3); }
+
+/* —— 背景风格四选一（t28）：整组表面阶梯变量随 data-bg 联动，边框色随底配平 ——
+   坑：obsidian 为默认（=当前 Raycast 配方），:root 已含同值；仍显式写一份，
+   用户在四方案间往返切换时属性必有确定归属，不依赖回退顺序 */
+body[data-bg="obsidian"] {
+  --bg: #0f1014; --surface: #16171c; --surface-hover: #1d1e24; --surface-input: #121318;
+  --border: rgba(255, 255, 255, 0.07);
+}
+body[data-bg="pitch"] {
+  --bg: #000000; --surface: #141414; --surface-hover: #1f1f1f; --surface-input: #0d0d0d;
+  --border: rgba(255, 255, 255, 0.08);
+}
+body[data-bg="graphite"] {
+  --bg: #14161c; --surface: #1c1f27; --surface-hover: #252935; --surface-input: #181a21;
+  --border: rgba(255, 255, 255, 0.08);
+}
+body[data-bg="ember"] {
+  --bg: #151312; --surface: #1d1a17; --surface-hover: #262220; --surface-input: #191613;
+  --border: rgba(255, 255, 255, 0.06);
+}
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-  /* 用户实测反馈加宽到 380px；基础字号同步 13→12 提密度 */
+  /* 380px 密度参数沿用；排版按 Raycast 暗底可读性配方：
+     基准字重 500（暗底上 400 发虚）、行高 1.55、+0.2px 正字距密而不挤 */
   width: 380px;
-  font: 400 12px/1.4 system-ui, -apple-system, sans-serif;
+  font: 500 12px/1.55 system-ui, -apple-system, sans-serif;
+  letter-spacing: 0.2px;
   background: var(--bg);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
   color: var(--text);
   padding: 14px;
   border-radius: var(--radius);
   -webkit-font-smoothing: antialiased;
 }
 .container { display: flex; flex-direction: column; gap: 7px; }
+/* 入场：单次淡入+轻微上浮（用户反馈 120ms 纯淡入几乎无感）——
+   幅度克制在 6px/240ms，可感知但不表演；transform 加进 transition 列表才能随 opacity 联动 */
+.container {
+  opacity: 0; transform: translateY(6px);
+  transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out);
+}
+.container.loaded { opacity: 1; transform: translateY(0); }
 
-/* Stagger entry */
-.container > * {
-  opacity: 0;
-  transform: translateY(6px);
-  transition: opacity 350ms var(--ease-out), transform 350ms var(--ease-out);
-}
-.container.loaded > * {
-  opacity: 1;
-  transform: translateY(0);
-}
-.container.loaded > :nth-child(1) { transition-delay: 0ms; }
-.container.loaded > :nth-child(2) { transition-delay: 40ms; }
-.container.loaded > :nth-child(3) { transition-delay: 80ms; }
-.container.loaded > :nth-child(4) { transition-delay: 120ms; }
-.container.loaded > :nth-child(5) { transition-delay: 160ms; }
-.container.loaded > :nth-child(6) { transition-delay: 200ms; }
-.container.loaded > :nth-child(7) { transition-delay: 240ms; }
-.container.loaded > :nth-child(8) { transition-delay: 280ms; }
+/* Stagger entry 已删除（见上：单次整体淡入替代） */
 
 /* —— 状态 Hero 卡 —— */
 /* 玻璃质感：表面渐变叠一层 accent 微光（随主题换色）；Running 时描边+外发光呈强调光晕 */
@@ -70,69 +83,90 @@ body {
   /* 坑：曾写 overflow:hidden 想裁渐变光晕——实际 background 本来就被 border-radius
      裁进圆角，该属性只会误伤子节点：波形开关的 ？ 气泡（help-tip）是 hero 子节点，
      向下弹出界即被父级裁掉半截。已移除；若日后往 hero 塞需要溢出裁剪的装饰层，
-     用 clip-path 或独立遮罩层，不要再加回 overflow:hidden。 */
+     用 clip-path 或独立遮罩层，不要再加回 overflow:hidden。
+     去 AI 味：radial-gradient 微光与 Running 外发光已删除，层级改由排版建立。 */
   display: flex; flex-direction: column; gap: 6px;
   padding: 10px 12px;
   border: 1px solid var(--border); border-radius: var(--radius);
-  background:
-    radial-gradient(130% 100% at 12% 0%, var(--accent-dim), transparent 58%),
-    var(--surface);
-  transition: border-color 300ms var(--ease-out), box-shadow 300ms var(--ease-out);
+  background: var(--surface);
+  transition: border-color 300ms var(--ease-out);
 }
-.hero.Running { border-color: var(--accent); box-shadow: 0 0 16px var(--accent-glow); }
+/* Running 状态表达 = 绿点实心 + 描边变色 + 状态词变绿（状态色只作语义，不加阴影不呼吸） */
+.hero.Running { border-color: var(--green); }
+.hero.Running .hero-state { color: var(--green); }
 .hero-top { display: flex; align-items: center; gap: 8px; }
-.hero-title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; flex: 1; }
+.hero-title { font-size: 13px; font-weight: 600; flex: 1; } /* 字距继承 body 的 +0.2px 正字距 */
 .hero-status { display: flex; align-items: center; gap: 10px; }
 /* 大状态词按增密要求 22→19，仍是面板视觉锚点 */
-.hero-state { font-size: 19px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; flex: 1; }
+/* 大状态词：19px/600，正字距 +0.2px（负字距的"设计感"属 AI 味特征） */
+.hero-state { font-size: 19px; font-weight: 600; letter-spacing: 0.2px; line-height: 1.2; flex: 1; }
+/* 数字一律 ui-monospace——等宽数字是工具类 UI 的身份标识 */
 .hero-timer {
+  font-family: ui-monospace, Consolas, 'Courier New', monospace;
   font-size: 11px; color: var(--text2); font-variant-numeric: tabular-nums;
-  padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px;
-  background: rgba(0, 0, 0, 0.2); white-space: nowrap;
+  white-space: nowrap;
 }
 /* 波形开关就近原则：紧凑行放波形正下方右对齐（从「外观」卡迁入） */
 .hero-wave-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .hero-wave-row label { font-size: 11px; color: var(--text2); cursor: pointer; user-select: none; }
-/* 实时波形条：面板内动画（不受叠层零动画红线约束，那条红线只在 content.ts 叠层） */
-.wave { display: block; width: 100%; height: 28px; border-radius: 8px; background: rgba(0, 0, 0, 0.18); }
+/* 实时波形条：面板内动画（不受叠层零动画红线约束，那条红线只在 content.ts 叠层）；底色用输入级深档 */
+.wave { display: block; width: 100%; height: 28px; border-radius: 6px; background: var(--surface-input); }
 
-/* —— 三段式分段控件（叠层外观模式）—— */
-.seg-row {
+/* —— 三段式分段控件（叠层外观模式）+ 背景风格四选一（.bsg 同构复用）—— */
+.seg-row, .bsg-row {
   display: flex; gap: 4px; padding: 3px;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-btn); background: var(--surface);
 }
-.seg {
+.seg, .bsg {
   flex: 1; min-width: 0; padding: 6px 0;
-  border: none; border-radius: 8px; background: transparent; color: var(--text2);
+  border: none; border-radius: 5px; background: transparent; color: var(--text2);
   font: 400 11px/1 system-ui, sans-serif; cursor: pointer;
   transition: background 150ms var(--ease-out), color 150ms var(--ease-out), transform 120ms var(--ease-out);
 }
-.seg:hover { color: var(--text); }
-.seg:active { transform: scale(0.96); }
-.seg.active { background: var(--accent); color: #fff; }
+.seg:hover, .bsg:hover { color: var(--text); }
+.seg:active, .bsg:active { transform: scale(0.96); }
+.seg.active, .bsg.active { background: var(--accent); color: #fff; }
 .seg-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
   background: #555; transition: background 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
 }
 .hero .status-dot { width: 12px; height: 12px; }
-/* 运行中呼吸：box-shadow 双色标关键帧做扩散/收敛，alternate 往返即呼吸 */
+/* 去 AI 味默认静态：绿点实心+状态词变绿已足够表意；呼吸动效由下方 body.anim 门控交还用户 */
+.status-dot.Running { background: var(--green); }
+.status-dot.Stopped { background: var(--red); }
+
+/* —— 动效开关（t28，prefs.animationsEnabled 默认关）——
+   坑：层级纪律——body.anim 类只是用户授权，系统 prefers-reduced-motion 优先级永远
+   更高（底部 media 块对同名选择器 animation/transition:none !important），
+   即使用户开了动效、系统声明减弱动态时依然零动画。恢复的是 t27 删除前的原幅度。 */
 @keyframes dotBreathe {
   from { box-shadow: 0 0 3px rgba(52, 199, 89, 0.4); }
   to { box-shadow: 0 0 9px rgba(52, 199, 89, 0.85); }
 }
-.status-dot.Running { background: var(--green); animation: dotBreathe 2s ease-in-out infinite alternate; }
-.status-dot.Stopped { background: var(--red); }
+body.anim .status-dot.Running { animation: dotBreathe 2s ease-in-out infinite alternate; }
+body.anim .container > * {
+  opacity: 0; transform: translateY(6px);
+  transition: opacity 350ms var(--ease-out), transform 350ms var(--ease-out);
+}
+body.anim .container.loaded > * { opacity: 1; transform: none; }
+body.anim .container.loaded > :nth-child(1) { transition-delay: 0ms; }
+body.anim .container.loaded > :nth-child(2) { transition-delay: 40ms; }
+body.anim .container.loaded > :nth-child(3) { transition-delay: 80ms; }
+body.anim .container.loaded > :nth-child(4) { transition-delay: 120ms; }
+body.anim .container.loaded > :nth-child(5) { transition-delay: 160ms; }
+body.anim .container.loaded > :nth-child(6) { transition-delay: 200ms; }
+body.anim .container.loaded > :nth-child(7) { transition-delay: 240ms; }
+body.anim .container.loaded > :nth-child(8) { transition-delay: 280ms; }
 
 /* Buttons row */
 .controls { display: flex; gap: 6px; }
 .btn {
   flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
-  /* 坑：用户反馈按钮太抢 Hero 卡的戏——整体收敛一档（padding 8→6、字号 12→11、
-     圆角脱离 var(--radius)14 改固定 10px），与增密后的行高匹配 */
-  padding: 6px 0; border: none; border-radius: 10px;
+  /* 坑：按钮收敛（padding 8→6、字号 12→11）避免抢 Hero 卡的戏；圆角按规格归 6px */
+  padding: 6px 0; border: none; border-radius: var(--radius-btn);
   font: 500 11px/1 system-ui, sans-serif; cursor: pointer;
-  transition: transform 120ms var(--ease-out), opacity 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+  transition: transform 120ms var(--ease-out), opacity 200ms var(--ease-out), filter 150ms var(--ease-out);
   -webkit-font-smoothing: antialiased;
 }
 .btn:active { transform: scale(0.96); }
@@ -142,8 +176,9 @@ body {
 #btnStart { background: var(--accent); color: #fff; }
 #btnStop { background: var(--red); color: #fff; }
 @media (hover: hover) and (pointer: fine) {
-  #btnStart:hover { box-shadow: 0 0 12px var(--accent-glow); }
-  #btnStop:hover { box-shadow: 0 0 12px rgba(255,59,48,0.3); }
+  /* 去 AI 味：hover 光晕删除，改亮度反馈（语义仍是"可点"，不发光） */
+  #btnStart:hover { filter: brightness(1.08); }
+  #btnStop:hover { filter: brightness(1.08); }
 }
 
 /* —— Bento 分组卡 —— */
@@ -156,7 +191,8 @@ body {
 
 /* Sections */
 .section { display: flex; flex-direction: column; gap: 5px; }
-.section-label { font-size: 11px; font-weight: 500; color: var(--text2); letter-spacing: 0.02em; text-transform: uppercase; }
+/* 去 AI 味：去 uppercase/letter-spacing（中文无意义且显模板味）；规格定稿 11px/600/--text2 */
+.section-label { font-size: 11px; font-weight: 600; color: var(--text2); }
 .card > .section-label + .section-label:not(:first-child),
 .card .sub-gap { margin-top: 4px; }
 /* 小节标题行：标题 + 可选 ?帮助气泡 同排对齐 */
@@ -171,7 +207,7 @@ body {
 }
 .select-wrap select {
   width: 100%; padding: 7px 28px 7px 10px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--surface); color: var(--text);
+  border-radius: var(--radius-btn); background: var(--surface-input); color: var(--text);
   font: 400 12px/1.4 system-ui, sans-serif; cursor: pointer;
   -webkit-appearance: none; appearance: none;
   transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out);
@@ -219,7 +255,7 @@ body {
   display: flex; align-items: center; gap: 4px;
   /* 坑：与 .btn 同批收敛（4×10→3×8），视觉重量随整体增密下调 */
   padding: 3px 8px;
-  border: 1px solid var(--border); border-radius: var(--radius);
+  border: 1px solid var(--border); border-radius: var(--radius-btn);
   background: var(--surface); color: var(--text2); font: 400 11px/1 system-ui, sans-serif;
   cursor: pointer;
   /* 坑：opacity 必须显式进 transition 列表——禁用态切换 opacity 时若无此属性会硬跳变 */
@@ -256,10 +292,10 @@ body {
   z-index: 30;
   width: max-content; max-width: 210px;
   padding: 8px 10px;
-  border: 1px solid var(--border); border-radius: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
   background: rgba(20, 20, 30, 0.92);
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  /* 浮层场景保留轻模糊（唯一豁免：气泡悬于内容之上，轻 blur 有真实功能价值） */
+  backdrop-filter: blur(8px);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   color: var(--text); font-size: 11px; font-weight: 400; line-height: 1.55;
   text-align: left; white-space: normal;
@@ -323,12 +359,13 @@ input[type="range"]::-webkit-slider-thumb {
   background: var(--text); border: none; cursor: pointer;
   transition: transform 120ms var(--ease-out), box-shadow 120ms var(--ease-out);
 }
-input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-shadow: 0 0 8px rgba(255,255,255,0.3); }
-.slider-value { font-size: 12px; color: var(--text); min-width: 24px; text-align: right; font-variant-numeric: tabular-nums; }
+input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
+/* 数字一律等宽：滑杆当前值/命中计数/时间戳同属工具 UI 身份标识 */
+.slider-value { font-family: ui-monospace, Consolas, 'Courier New', monospace; font-size: 12px; color: var(--text); min-width: 24px; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Model info */
 .model-info {
-  font-size: 11px; color: var(--text2); letter-spacing: 0.01em;
+  font-size: 11px; color: var(--text2);
   transition: color 200ms var(--ease-out);
 }
 
@@ -339,7 +376,8 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
   word-break: break-word;
 }
 .preview .sentence {
-  color: var(--accent); font-size: 11px; margin-bottom: 3px; line-height: 1.4;
+  /* 去语义越界：accent 只留四处（主按钮/选中态/焦点环/波形当前柱），流式句子回归中性色 */
+  color: var(--text2); font-size: 11px; margin-bottom: 3px; line-height: 1.4;
   animation: sentenceIn 200ms var(--ease-out) both;
 }
 .preview .current-text { color: var(--text); font-size: 13px; line-height: 1.5; }
@@ -383,7 +421,7 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 .search-wrap {
   display: flex; align-items: center; gap: 6px;
   padding: 6px 8px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--surface);
+  border-radius: var(--radius-btn); background: var(--surface-input);
   transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out);
 }
 .search-wrap:focus-within { border-color: rgba(255,255,255,0.15); background: var(--surface-hover); }
@@ -393,7 +431,7 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
   color: var(--text); font: 400 12px/1.4 system-ui, sans-serif;
 }
 #searchInput::placeholder { color: var(--text2); }
-.search-count { font-size: 10px; color: var(--text2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.search-count { font-family: ui-monospace, Consolas, 'Courier New', monospace; font-size: 10px; color: var(--text2); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .search-clear {
   display: none; align-items: center; justify-content: center;
   width: 16px; height: 16px; padding: 0; flex-shrink: 0;
@@ -404,8 +442,8 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 .search-clear:active { transform: scale(0.9); }
 .search-clear svg { width: 10px; height: 10px; pointer-events: none; }
 .transcript-entry mark {
-  /* 坑：mark 默认黄底黑字，在深色主题下刺眼；用主题 accent 半透明底做高亮（随色板联动） */
-  background: var(--accent-dim); color: inherit;
+  /* 坑：mark 默认黄底黑字刺眼；accent 场合收敛后搜索高亮改中性白罩（可读且不抢语义色） */
+  background: rgba(255, 255, 255, 0.16); color: inherit;
   border-radius: 3px; padding: 0 1px;
 }
 .disclaimer { font-size: 10px; color: var(--text2); text-align: center; line-height: 1.3; }
@@ -424,16 +462,17 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 .theme-row { display: flex; gap: 6px; }
 .swatch {
   flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px;
-  padding: 8px 0 6px; border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 0 6px; border: 1px solid var(--border); border-radius: var(--radius-btn);
   background: var(--surface); cursor: pointer;
   transition: border-color 150ms var(--ease-out), background 150ms var(--ease-out), transform 120ms var(--ease-out), box-shadow 150ms var(--ease-out);
 }
 .swatch:hover { background: var(--surface-hover); }
 .swatch:active { transform: scale(0.95); }
-/* 每个按钮自带 --swatch-color（内联），选中环与色卡同色，无需按主题写死五套规则 */
+/* 每个按钮自带 --swatch-color（内联），选中环与色卡同色；去 AI 味：外发光光环删除，
+   只留 inset 描边环表达选中态 */
 .swatch.active {
   border-color: var(--swatch-color);
-  box-shadow: inset 0 0 0 1px var(--swatch-color), 0 0 8px var(--swatch-color);
+  box-shadow: inset 0 0 0 1px var(--swatch-color);
 }
 .swatch .chip {
   width: 18px; height: 18px; border-radius: 50%;
@@ -450,7 +489,7 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
   outline: 1.5px solid var(--accent); outline-offset: 2px; border-radius: 6px;
 }
 .row input[type="checkbox"]:focus-visible { border-radius: 999px; }
-.swatch:focus-visible { border-radius: 10px; }
+.swatch:focus-visible { border-radius: var(--radius-btn); }
 /* 搜索框焦点画在容器上（内部 input 已去 outline），负 offset 贴边不外扩 */
 .search-wrap:focus-within {
   outline: 1.5px solid var(--accent); outline-offset: -1px;
@@ -458,17 +497,19 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .btn, .icon-btn, .help-btn, .help-tip, .container > *, .status-dot, .hero, .swatch, .seg,
+  /* 坑：层级最高——t28 动效开关（body.anim）只是用户偏好，系统"减弱动态"永远优先：
+     这里对同名选择器 animation/transition none !important，body.anim 规则再高特异性也输给 !important */
+  .btn, .icon-btn, .help-btn, .help-tip, .container, .container > *, body.anim .container > *,
+  .status-dot, body.anim .status-dot.Running, .hero, .swatch, .seg, .bsg,
   input[type="range"], input[type="range"]::-webkit-slider-thumb,
   .row input[type="checkbox"], .row input[type="checkbox"]::after,
   .preview .sentence, .status-bar, .model-info,
   .transcript-box, .disclaimer {
     transition: none !important; animation: none !important;
   }
-  /* 呼吸灯属 animation，上面的 animation:none 已覆盖 .status-dot.Running；
-     波形条是 canvas 绘制不走 CSS，由 popup.ts 按 matchMedia 改为事件驱动重绘 */
-  .btn:active, .icon-btn:active, .help-btn:active, .swatch:active, .seg:active { transform: none; }
-  .container > * { opacity: 1; transform: none; }
+  /* reduce+anim 同开时子元素初始 opacity:0 需强制可见（无过渡瞬现） */
+  .container, .container > *, body.anim .container > * { opacity: 1; transform: none; }
+  .btn:active, .icon-btn:active, .help-btn:active, .swatch:active, .seg:active, .bsg:active { transform: none; }
 }
 </style>
 </head>
@@ -690,19 +731,21 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
       </span>
     </div>
     <div class="theme-row" role="radiogroup" aria-labelledby="appearanceLabel">
-      <button type="button" class="swatch active" data-theme="cyan" role="radio" aria-checked="true" style="--swatch-color:#5e9eff;">
+      <!-- 坑：内联 --swatch-color 是色卡预览+选中环取色口，必须与 :root/body[data-theme]
+           的 --accent 同值同步——改主题色时两处一起改，否则预览与实际生效色不符 -->
+      <button type="button" class="swatch active" data-theme="cyan" role="radio" aria-checked="true" style="--swatch-color:#4c9ee8;">
         <span class="chip"></span><span class="swatch-name" data-key="themeCyan">青蓝</span>
       </button>
-      <button type="button" class="swatch" data-theme="emerald" role="radio" aria-checked="false" style="--swatch-color:#34d399;">
+      <button type="button" class="swatch" data-theme="emerald" role="radio" aria-checked="false" style="--swatch-color:#3fae8c;">
         <span class="chip"></span><span class="swatch-name" data-key="themeEmerald">翡翠绿</span>
       </button>
-      <button type="button" class="swatch" data-theme="violet" role="radio" aria-checked="false" style="--swatch-color:#a78bfa;">
+      <button type="button" class="swatch" data-theme="violet" role="radio" aria-checked="false" style="--swatch-color:#9086cf;">
         <span class="chip"></span><span class="swatch-name" data-key="themeViolet">紫罗兰</span>
       </button>
-      <button type="button" class="swatch" data-theme="amber" role="radio" aria-checked="false" style="--swatch-color:#fbbf24;">
+      <button type="button" class="swatch" data-theme="amber" role="radio" aria-checked="false" style="--swatch-color:#cba53f;">
         <span class="chip"></span><span class="swatch-name" data-key="themeAmber">琥珀金</span>
       </button>
-      <button type="button" class="swatch" data-theme="rose" role="radio" aria-checked="false" style="--swatch-color:#fb7185;">
+      <button type="button" class="swatch" data-theme="rose" role="radio" aria-checked="false" style="--swatch-color:#cd7382;">
         <span class="chip"></span><span class="swatch-name" data-key="themeRose">玫瑰红</span>
       </button>
     </div>
@@ -722,8 +765,34 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); box-sh
       <button type="button" class="seg" data-bgmode="solid" role="radio" aria-checked="false"><span class="seg-name" data-key="overlayBgSolid">纯色</span></button>
       <button type="button" class="seg" data-bgmode="outline" role="radio" aria-checked="false"><span class="seg-name" data-key="overlayBgOutline">描边</span></button>
     </div>
-    <!-- 坑：波形开关已就近迁入 Hero 卡（canvas 正下方），此处不得再留副本——
-          重复 id 会让 getElementById 只命中前者、label/aria 关系错乱 -->
+
+    <!-- 背景风格四选一（t28）：纯 popup 视觉，不进 FORWARD 链路 -->
+    <div class="label-row sub-gap">
+      <span class="section-label" id="bgSchemeLabel">背景风格</span>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnBgScheme" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipBgScheme">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipBgScheme">面板底色与卡片明度四选一：曜石黑（默认）/ 纯黑 / 石墨蓝灰 / 暖碳。仅影响本面板外观，选择自动保存。</span>
+      </span>
+    </div>
+    <div class="bsg-row" role="radiogroup" aria-labelledby="bgSchemeLabel">
+      <button type="button" class="bsg active" data-scheme="obsidian" role="radio" aria-checked="true"><span class="seg-name" data-key="bgObsidian">曜石黑</span></button>
+      <button type="button" class="bsg" data-scheme="pitch" role="radio" aria-checked="false"><span class="seg-name" data-key="bgPitch">纯黑</span></button>
+      <button type="button" class="bsg" data-scheme="graphite" role="radio" aria-checked="false"><span class="seg-name" data-key="bgGraphite">石墨蓝灰</span></button>
+      <button type="button" class="bsg" data-scheme="ember" role="radio" aria-checked="false"><span class="seg-name" data-key="bgEmber">暖碳</span></button>
+    </div>
+
+    <div class="row">
+      <input type="checkbox" id="chkAnim">
+      <label for="chkAnim" id="showAnimations">动效</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnAnimations" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipAnimations">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipAnimations">开启后恢复状态灯呼吸与面板入场交错动画。默认关闭；开销可忽略，且系统"减弱动态"设置始终优先。</span>
+      </span>
+    </div>
   </div>
 
   <div class="preview" id="textPreview">

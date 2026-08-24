@@ -93,6 +93,15 @@ const strings: Record<string, Record<string, string>> = {
     helpTimestamps: '在每句前显示 [分:秒] 时标，表示相对本次会话第一句的偏移；旧版本记录的句子没有时标信息，只显示纯文本。',
     helpAppearance: '更换面板强调色：影响开关选中态、滑杆填充、主按钮与命中高亮等控件配色，选择自动保存。',
     helpOverlayBg: '字幕叠层的背景样式：毛玻璃=半透明模糊底；纯色=不透明深色底；描边=无底色、仅文字描边。切换即时生效。',
+    // —— t28 背景风格四选一 + 动效开关 ——
+    bgSchemeLabel: '背景风格',
+    bgObsidian: '曜石黑',
+    bgPitch: '纯黑',
+    bgGraphite: '石墨蓝灰',
+    bgEmber: '暖碳',
+    helpBgScheme: '面板底色与卡片明度四选一：曜石黑（默认）/ 纯黑 / 石墨蓝灰 / 暖碳。仅影响本面板外观，选择自动保存。',
+    showAnimations: '动效',
+    helpAnimations: '开启后恢复状态灯呼吸与面板入场交错动画。默认关闭；开销可忽略，且系统"减弱动态"设置始终优先。',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -172,6 +181,14 @@ const strings: Record<string, Record<string, string>> = {
     helpTimestamps: 'Shows an [mm:ss] offset before each line, relative to the first sentence of this session. Sentences recorded by older versions carry no timestamp and appear as plain text.',
     helpAppearance: 'Changes the panel accent color used by toggles, slider fills, the primary button and highlights. Your choice is saved automatically.',
     helpOverlayBg: 'Background style of the subtitle overlay: Glass = translucent blurred backdrop; Solid = opaque dark plate; Outline = no plate, outlined text only. Changes apply instantly.',
+    bgSchemeLabel: 'Background',
+    bgObsidian: 'Obsidian',
+    bgPitch: 'Pitch Black',
+    bgGraphite: 'Graphite',
+    bgEmber: 'Warm Charcoal',
+    helpBgScheme: 'Pick one of four panel background schemes: Obsidian (default) / Pitch Black / Graphite / Warm Charcoal. Affects this panel only; saved automatically.',
+    showAnimations: 'Animations',
+    helpAnimations: 'Restores the breathing status dot and the staggered panel entrance. Off by default; the cost is negligible, and your system "reduce motion" setting always wins.',
   },
 };
 
