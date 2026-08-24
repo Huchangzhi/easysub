@@ -73,6 +73,7 @@ const strings: Record<string, Record<string, string>> = {
     helpEndpoint3: '无论是否检测到停顿，当前句累计到该时长就强制结束，避免单条字幕过长难以阅读。',
     // —— 历史检索 + 新功能开关 ——
     searchPlaceholder: '搜索历史字幕…',
+    clearSearch: '清除搜索',
     searchNoMatch: '没有匹配的字幕',
     // 坑：{n} 是占位符不是模板语法，使用方必须手动 .replace('{n}', String(n))
     searchHits: '{n} 条命中',
@@ -99,9 +100,19 @@ const strings: Record<string, Record<string, string>> = {
     bgPitch: '纯黑',
     bgGraphite: '石墨蓝灰',
     bgEmber: '暖碳',
+    // —— t31 浅色模式下的背景方案名（与深色名一一对应）——
+    bgObsidianLight: '暖灰白',
+    bgPitchLight: '纯白',
+    bgGraphiteLight: '冷灰蓝',
+    bgEmberLight: '米暖',
     helpBgScheme: '面板底色与卡片明度四选一：曜石黑（默认）/ 纯黑 / 石墨蓝灰 / 暖碳。仅影响本面板外观，选择自动保存。',
     showAnimations: '动效',
-    helpAnimations: '开启后恢复状态灯呼吸与面板入场交错动画。默认关闭；开销可忽略，且系统"减弱动态"设置始终优先。',
+    helpAnimations: '开启后恢复状态灯呼吸与面板入场交错动画。默认关闭；开销可忽略。注意：系统开启"减弱动态效果"时本开关不生效。',
+    // —— t29 深浅模式 ——
+    colorModeLabel: '深浅模式',
+    modeDark: '深色',
+    modeLight: '浅色',
+    helpColorMode: '切换面板深浅外观。浅色为独立调色（非反色）：白卡片、加深强调色，对比度已校准。选择自动保存。',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -168,6 +179,7 @@ const strings: Record<string, Record<string, string>> = {
     helpEndpoint2: 'Also tries to break at short pauses during continuous speech to split long passages. Lower it to cut more eagerly at brief pauses; raise it to reduce false breaks, at the cost of longer sentences.',
     helpEndpoint3: 'Force-finishes the sentence when it reaches this duration even without a detected pause, so no single subtitle line gets too long to read.',
     searchPlaceholder: 'Search transcript…',
+    clearSearch: 'Clear search',
     searchNoMatch: 'No matching subtitles',
     searchHits: '{n} hit(s)',
     showLookback: 'Lookback',
@@ -186,9 +198,17 @@ const strings: Record<string, Record<string, string>> = {
     bgPitch: 'Pitch Black',
     bgGraphite: 'Graphite',
     bgEmber: 'Warm Charcoal',
+    bgObsidianLight: 'Warm Grey',
+    bgPitchLight: 'Pure White',
+    bgGraphiteLight: 'Cool Blue-Grey',
+    bgEmberLight: 'Warm Cream',
     helpBgScheme: 'Pick one of four panel background schemes: Obsidian (default) / Pitch Black / Graphite / Warm Charcoal. Affects this panel only; saved automatically.',
     showAnimations: 'Animations',
-    helpAnimations: 'Restores the breathing status dot and the staggered panel entrance. Off by default; the cost is negligible, and your system "reduce motion" setting always wins.',
+    helpAnimations: 'Restores the breathing status dot and the staggered panel entrance. Off by default; the cost is negligible. Note: this switch has no effect while your system "reduce motion" setting is on.',
+    colorModeLabel: 'Appearance Mode',
+    modeDark: 'Dark',
+    modeLight: 'Light',
+    helpColorMode: 'Switch the panel between dark and light. Light is an independent palette (not an inversion): white cards, darkened accents, contrast pre-calibrated. Saved automatically.',
   },
 };
 

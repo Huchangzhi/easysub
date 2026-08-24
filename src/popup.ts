@@ -97,6 +97,8 @@ async function applyLang() {
   $('resetEndpointLabel').textContent = tr('resetEndpoint');
   // —— 历史检索 + 新功能开关（文案随语言切换实时刷新）——
   searchInput.setAttribute('placeholder', tr('searchPlaceholder'));
+  // 坑（t32）：清除按钮的 aria-label 此前是 HTML 静态中文，英文界面读屏仍报中文——补刷新
+  $('btnSearchClear').setAttribute('aria-label', tr('clearSearch'));
   $('showLookback').textContent = tr('showLookback');
   $('helpTipLookback').textContent = tr('helpLookback');
   $('showLatency').textContent = tr('showLatency');
@@ -117,6 +119,11 @@ async function applyLang() {
   $('helpTipBgScheme').textContent = tr('helpBgScheme');
   $('showAnimations').textContent = tr('showAnimations');
   $('helpTipAnimations').textContent = tr('helpAnimations');
+  $('colorModeLabel').textContent = tr('colorModeLabel');
+  $('modeDark').textContent = tr('modeDark');
+  $('modeLight').textContent = tr('modeLight');
+  $('helpTipColorMode').textContent = tr('helpColorMode');
+  updateBgSchemeNames(); // 背景方案名按当前模式+语言刷新（t31，见函数内坑注）
   // Hero 大状态词也要跟随语言刷新（依据最近一次状态与是否启动过）
   statusWordEl.textContent = tSync(currentLang,
     lastStatus === 'Running' ? 'stateRunning' : (hasStarted ? 'stateStopped' : 'stateReady'));
@@ -151,6 +158,9 @@ async function loadPrefs() {
   // 背景风格四选一（白名单校验回退 obsidian）
   const bs = BG_SCHEMES.includes(prefs.bgScheme) ? prefs.bgScheme : 'obsidian';
   applyBgScheme(bs);
+  // 深浅模式（t29，默认 dark；浅色为独立调色非反色，白名单回退 dark）
+  const cm = COLOR_MODES.includes(prefs.colorMode) ? prefs.colorMode : 'dark';
+  applyColorMode(cm);
   // 动效开关默认关（=== true 才开，与"用户要求默认关闭"对齐）；恢复即挂/摘 .anim
   chkAnim.checked = prefs.animationsEnabled === true;
   applyAnim();
@@ -241,6 +251,46 @@ chkAnim.onchange = () => {
   savePrefs({ animationsEnabled: chkAnim.checked });
   applyAnim();
 };
+
+// —— 深浅模式（t29）：'dark' 默认 | 'light'，body[data-mode] 整组变量覆盖 ——
+// 纯 popup 视觉不进 FORWARD/PREFS_PATCH 链路（同 bgScheme）
+const COLOR_MODES = ['dark', 'light'];
+
+function applyColorMode(mode: string) {
+  document.body.dataset.mode = mode;
+  document.querySelectorAll<HTMLButtonElement>('.cmode').forEach(b => {
+    const on = b.dataset.cmode === mode;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', String(on));
+  });
+  updateBgSchemeNames();
+}
+
+// —— 背景方案名随深浅模式联动（t31）：dark=曜石黑/纯黑/石墨蓝灰/暖碳，light=暖灰白/纯白/冷灰蓝/米暖 ——
+// 坑：两个维度都要覆盖——语言切换（applyLang）用当前模式的文案，模式切换（applyColorMode）
+// 用当前语言的文案；故不能走静态 [data-key] 委托（那只会按深色 key 刷），统一由此函数按
+// body.dataset.mode + currentLang 取词。HTML 里这四个 span 已摘除 data-key 防通用循环回写。
+function updateBgSchemeNames() {
+  const light = document.body.dataset.mode === 'light';
+  const names: Record<string, string> = {
+    obsidian: tSync(currentLang, light ? 'bgObsidianLight' : 'bgObsidian'),
+    pitch: tSync(currentLang, light ? 'bgPitchLight' : 'bgPitch'),
+    graphite: tSync(currentLang, light ? 'bgGraphiteLight' : 'bgGraphite'),
+    ember: tSync(currentLang, light ? 'bgEmberLight' : 'bgEmber'),
+  };
+  document.querySelectorAll<HTMLElement>('.bsg .seg-name').forEach(el => {
+    const scheme = el.closest<HTMLButtonElement>('.bsg')?.dataset.scheme;
+    if (scheme && names[scheme]) el.textContent = names[scheme];
+  });
+}
+
+document.querySelectorAll<HTMLButtonElement>('.cmode').forEach(b => {
+  b.onclick = () => {
+    const m = b.dataset.cmode!;
+    applyColorMode(m);
+    savePrefs({ colorMode: m });
+  };
+});
 
 function applyBgMode(mode: string) {
   document.querySelectorAll<HTMLButtonElement>('.seg').forEach(b => {

@@ -303,9 +303,10 @@ function latencyLevel(ms: number): number {
 }
 
 function latencyTipText(lvl: number): string {
-  // i18n.ts 不在本任务改动范围内，文案按当前语言内联双语
+  // 坑（t32）：两语言的阈值描述必须与 latencyLevel 的实际阈值(LATENCY_LOW_MS=200/HIGH=1000)一致——
+  // 此前英文写的是 <1000/1000-2000/>2000，与真实分档差了一个数量级，已修正
   if (_lang !== 'zh_CN') {
-    return ['Low latency (<1000ms)', 'Medium latency (1000-2000ms)', 'High latency (>2000ms) - check device resource usage'][lvl];
+    return ['Low latency (<200ms)', 'Medium latency (200ms-1s)', 'High latency (>1s) - check device resource usage'][lvl];
   }
   return ['延迟优秀（<200ms）', '延迟中（<1s）', `延迟高（≥1s）建议检查设备资源占用`][lvl];
 }

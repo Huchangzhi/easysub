@@ -52,6 +52,61 @@ body[data-bg="ember"] {
   --bg: #151312; --surface: #1d1a17; --surface-hover: #262220; --surface-input: #191613;
   --border: rgba(255, 255, 255, 0.06);
 }
+
+/* —— 浅色模式（t29）：独立调色非反色——禁纯白底/纯黑字，海拔表达换回轻阴影 ——
+   坑：必须放在 data-bg 组之后，浅色下 bg/surface 等以 data-mode 为准覆盖背景方案；
+   主题 accent 的浅色加深变体在下方单独成块（原莫兰迪值在白底对比不足） */
+body[data-mode="light"] {
+  --bg: #f4f5f7; --surface: #ffffff; --surface-hover: #eceef1; --surface-input: #eef0f2;
+  --border: rgba(0, 0, 0, 0.09);
+  --text: rgba(0, 0, 0, 0.87);
+  --text2: rgba(0, 0, 0, 0.52);
+}
+/* —— 背景四方案的浅色变体（t30）：双 attr 特异性(0,2,1)压过上方通用浅色组(0,1,1)，
+   四选一在浅色下真实生效且肉眼可辨（暖灰白/纯白/冷灰蓝/米暖）。
+   坑：只覆盖表面阶梯五属性，不碰 text/text2——四底均极浅(L>93%)，通用文字色对比已达标；
+   与下方 data-mode×data-theme 的 --accent 变体属性不相交，三 attr 组合无冲突 */
+body[data-mode="light"][data-bg="obsidian"] {
+  --bg: #f4f5f2; --surface: #fbfbfa; --surface-hover: #efefec; --surface-input: #f0f0ed;
+  --border: rgba(0, 0, 0, 0.08);
+}
+body[data-mode="light"][data-bg="pitch"] {
+  --bg: #ffffff; --surface: #ffffff; /* 纯白方案卡片与底同色，层级全靠边框区分 */
+  --surface-hover: #f2f2f2; --surface-input: #f7f7f7;
+  --border: rgba(0, 0, 0, 0.10);
+}
+body[data-mode="light"][data-bg="graphite"] {
+  --bg: #eef1f5; --surface: #f8fafc; --surface-hover: #e6eaef; --surface-input: #f1f4f8;
+  --border: rgba(20, 40, 70, 0.10);
+}
+body[data-mode="light"][data-bg="ember"] {
+  --bg: #faf6f0; --surface: #fffdf9; --surface-hover: #f3ede4; --surface-input: #f8f4ec;
+  --border: rgba(90, 70, 40, 0.10);
+}
+/* 海拔换轻阴影（浅色下阴影合法；深色下 elevation 靠提亮表面所以无阴影） */
+body[data-mode="light"] .card,
+body[data-mode="light"] .hero { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
+/* 浮层气泡改白底深字，投影加深维持浮层感；箭头描边随 --border 自动配平 */
+body[data-mode="light"] .help-tip {
+  background: #ffffff; color: rgba(0, 0, 0, 0.82); border-color: rgba(0, 0, 0, 0.12);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+body[data-mode="light"] .preview::-webkit-scrollbar-thumb,
+body[data-mode="light"] .transcript-box::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.18); }
+body[data-mode="light"] .preview::-webkit-scrollbar-thumb:hover,
+body[data-mode="light"] .transcript-box::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.3); }
+body[data-mode="light"] .transcript-entry mark { background: rgba(0, 0, 0, 0.1); }
+/* 色卡预览 chip 内联色是暗底调的，浅底下整体压暗一档保观感一致（不动内联值，
+   免去 JS/双份内联维护；选中环描边仍用原色可辨） */
+body[data-mode="light"] .swatch .chip { filter: saturate(0.9) brightness(0.9); }
+
+/* 五套主题的浅色加深变体：白底上原莫兰迪值对比不足，统一加深保证 ≥4.5:1
+   （cyan #2563ae≈5.4 / emerald #1e7d5f≈4.9 / violet #5f54a8≈5.6 / amber #8a6d14≈5.1 / rose #a34a58≈5.3） */
+body[data-mode="light"][data-theme="cyan"]    { --accent: #2563ae; --accent-dim: rgba(37, 99, 174, 0.16); }
+body[data-mode="light"][data-theme="emerald"] { --accent: #1e7d5f; --accent-dim: rgba(30, 125, 95, 0.16); }
+body[data-mode="light"][data-theme="violet"]  { --accent: #5f54a8; --accent-dim: rgba(95, 84, 168, 0.16); }
+body[data-mode="light"][data-theme="amber"]   { --accent: #8a6d14; --accent-dim: rgba(138, 109, 20, 0.18); }
+body[data-mode="light"][data-theme="rose"]    { --accent: #a34a58; --accent-dim: rgba(163, 74, 88, 0.16); }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
   /* 380px 密度参数沿用；排版按 Raycast 暗底可读性配方：
@@ -112,20 +167,20 @@ body {
 /* 实时波形条：面板内动画（不受叠层零动画红线约束，那条红线只在 content.ts 叠层）；底色用输入级深档 */
 .wave { display: block; width: 100%; height: 28px; border-radius: 6px; background: var(--surface-input); }
 
-/* —— 三段式分段控件（叠层外观模式）+ 背景风格四选一（.bsg 同构复用）—— */
-.seg-row, .bsg-row {
+/* —— 三段式分段控件（叠层外观模式）+ 背景风格/深浅模式选择（.bsg/.cmode 同构复用）—— */
+.seg-row, .bsg-row, .cmode-row {
   display: flex; gap: 4px; padding: 3px;
   border: 1px solid var(--border); border-radius: var(--radius-btn); background: var(--surface);
 }
-.seg, .bsg {
+.seg, .bsg, .cmode {
   flex: 1; min-width: 0; padding: 6px 0;
   border: none; border-radius: 5px; background: transparent; color: var(--text2);
   font: 400 11px/1 system-ui, sans-serif; cursor: pointer;
   transition: background 150ms var(--ease-out), color 150ms var(--ease-out), transform 120ms var(--ease-out);
 }
-.seg:hover, .bsg:hover { color: var(--text); }
-.seg:active, .bsg:active { transform: scale(0.96); }
-.seg.active, .bsg.active { background: var(--accent); color: #fff; }
+.seg:hover, .bsg:hover, .cmode:hover { color: var(--text); }
+.seg:active, .bsg:active, .cmode:active { transform: scale(0.96); }
+.seg.active, .bsg.active, .cmode.active { background: var(--accent); color: #fff; }
 .seg-name { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
@@ -730,8 +785,21 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
         <span class="help-tip" role="tooltip" id="helpTipAppearance">更换面板强调色：影响开关选中态、滑杆填充、主按钮与命中高亮等控件配色，选择自动保存。</span>
       </span>
     </div>
-    <div class="theme-row" role="radiogroup" aria-labelledby="appearanceLabel">
-      <!-- 坑：内联 --swatch-color 是色卡预览+选中环取色口，必须与 :root/body[data-theme]
+    <!-- 深浅模式（t29）：独立调色非反色，纯 popup 视觉不进 FORWARD 链路 -->
+    <div class="label-row sub-gap">
+      <span class="section-label" id="colorModeLabel">深浅模式</span>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnColorMode" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipColorMode">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipColorMode">切换面板深浅外观。浅色为独立调色（非反色）：白卡片、加深强调色，对比度已校准。选择自动保存。</span>
+      </span>
+    </div>
+    <div class="cmode-row" role="radiogroup" aria-labelledby="colorModeLabel">
+      <button type="button" class="cmode active" data-cmode="dark" role="radio" aria-checked="true"><span class="seg-name" data-key="modeDark">深色</span></button>
+      <button type="button" class="cmode" data-cmode="light" role="radio" aria-checked="false"><span class="seg-name" data-key="modeLight">浅色</span></button>
+    </div>
+    <div class="theme-row" role="radiogroup" aria-labelledby="appearanceLabel">      <!-- 坑：内联 --swatch-color 是色卡预览+选中环取色口，必须与 :root/body[data-theme]
            的 --accent 同值同步——改主题色时两处一起改，否则预览与实际生效色不符 -->
       <button type="button" class="swatch active" data-theme="cyan" role="radio" aria-checked="true" style="--swatch-color:#4c9ee8;">
         <span class="chip"></span><span class="swatch-name" data-key="themeCyan">青蓝</span>
@@ -777,10 +845,12 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
       </span>
     </div>
     <div class="bsg-row" role="radiogroup" aria-labelledby="bgSchemeLabel">
-      <button type="button" class="bsg active" data-scheme="obsidian" role="radio" aria-checked="true"><span class="seg-name" data-key="bgObsidian">曜石黑</span></button>
-      <button type="button" class="bsg" data-scheme="pitch" role="radio" aria-checked="false"><span class="seg-name" data-key="bgPitch">纯黑</span></button>
-      <button type="button" class="bsg" data-scheme="graphite" role="radio" aria-checked="false"><span class="seg-name" data-key="bgGraphite">石墨蓝灰</span></button>
-      <button type="button" class="bsg" data-scheme="ember" role="radio" aria-checked="false"><span class="seg-name" data-key="bgEmber">暖碳</span></button>
+      <!-- 坑（t31）：这四个名字随深浅模式联动，不走 [data-key] 静态委托——
+           通用循环会按深色 key 覆盖掉浅色名。文字由 popup.ts updateBgSchemeNames() 统一刷新 -->
+      <button type="button" class="bsg active" data-scheme="obsidian" role="radio" aria-checked="true"><span class="seg-name">曜石黑</span></button>
+      <button type="button" class="bsg" data-scheme="pitch" role="radio" aria-checked="false"><span class="seg-name">纯黑</span></button>
+      <button type="button" class="bsg" data-scheme="graphite" role="radio" aria-checked="false"><span class="seg-name">石墨蓝灰</span></button>
+      <button type="button" class="bsg" data-scheme="ember" role="radio" aria-checked="false"><span class="seg-name">暖碳</span></button>
     </div>
 
     <div class="row">
