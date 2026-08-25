@@ -120,8 +120,11 @@ async function applyLang() {
   $('showAnimations').textContent = tr('showAnimations');
   $('helpTipAnimations').textContent = tr('helpAnimations');
   $('colorModeLabel').textContent = tr('colorModeLabel');
-  $('modeDark').textContent = tr('modeDark');
-  $('modeLight').textContent = tr('modeLight');
+  // 坑（t33 根因）：深色/浅色两个按钮名是 data-key 委托的 span（HTML 无 id）——
+  // 此前这里多写了两行 $('modeDark').textContent，$() 返回 null 抛 TypeError，
+  // applyLang 从该行起整体中断：helpTipColorMode 气泡/btnLang/状态词/renderTranscript
+ // 全部停止刷新，表现为「英文界面下深浅模式 ? 气泡仍是中文」。两行已删，
+  // 文案由上方 [data-key] 通用循环正确覆盖；新增 $() 引用时务必复跑 id 存在性比对。
   $('helpTipColorMode').textContent = tr('helpColorMode');
   updateBgSchemeNames(); // 背景方案名按当前模式+语言刷新（t31，见函数内坑注）
   // Hero 大状态词也要跟随语言刷新（依据最近一次状态与是否启动过）
