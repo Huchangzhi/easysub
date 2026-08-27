@@ -1,0 +1,49 @@
+name: Test Models
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download & package translation models (diagnostic)
+        run: |
+          set -x
+          pwd
+          whoami
+          df -h "$PWD" | tail -1
+          df -h "$HOME" | tail -1
+          python3 -m pip install -q --user huggingface_hub
+          python3 - <<'PY'
+          import os
+          print('PY CWD:', os.getcwd())
+          from huggingface_hub import hf_hub_download
+          pairs = [('Xenova/opus-mt-en-zh', 'opus-mt-en-zh'), ('Xenova/opus-mt-zh-en', 'opus-mt-zh-en')]
+          files = [
+              'config.json', 'generation_config.json', 'tokenizer.json',
+              'tokenizer_config.json', 'special_tokens_map.json', 'quantize_config.json',
+              'source.spm', 'target.spm', 'vocab.json',
+              'onnx/encoder_model_quantized.onnx',
+              'onnx/decoder_model_merged_quantized.onnx',
+          ]
+          total = 0
+          for repo, local in pairs:
+              for f in files:
+                  try:
+                      p = hf_hub_download(repo, f)
+                      dst = os.path.join(local, f)
+                      os.makedirs(os.path.dirname(dst), exist_ok=True)
+                      os.replace(p, dst)
+                      total += 1
+                      print('OK', repo, f, '->', dst, 'size=', os.path.getsize(dst))
+                  except Exception as e:
+                      print('FAIL', repo, f, type(e).__name__, repr(e))
+          print('TOTAL_OK', total)
+          PY
+          echo "=== tree ==="
+          find opus-mt-en-zh opus-mt-zh-en -type f | sort
+          echo "=== zip ==="
+          zip -r models.zip opus-mt-en-zh opus-mt-zh-en
+          ls -lh models.zip
+          unzip -l models.zip | head -40
