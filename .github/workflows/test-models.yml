@@ -24,6 +24,7 @@ jobs:
               for f in files:
                   hf_hub_download(repo, f, local_dir=local)
           PY
+          rm -rf opus-mt-en-zh/.cache opus-mt-zh-en/.cache
           echo "=== tree ==="
           find opus-mt-en-zh opus-mt-zh-en -type f -printf '%p %s bytes\n' | sort
           echo "=== zip ==="

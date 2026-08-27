@@ -139,9 +139,10 @@ jobs:
               for f in files:
                   hf_hub_download(repo, f, local_dir=local)
           PY
+          rm -rf opus-mt-en-zh/.cache opus-mt-zh-en/.cache
           find opus-mt-en-zh opus-mt-zh-en -type f -printf '%p %s\n' | sort
-          zip -r ../easysub-translation-models-v${{ github.event.inputs.version }}.zip opus-mt-en-zh opus-mt-zh-en
-          ls -lh ../easysub-translation-models-v${{ github.event.inputs.version }}.zip
+          zip -r easysub-translation-models-v${{ github.event.inputs.version }}.zip opus-mt-en-zh opus-mt-zh-en
+          ls -lh easysub-translation-models-v${{ github.event.inputs.version }}.zip
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
