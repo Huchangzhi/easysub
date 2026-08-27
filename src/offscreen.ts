@@ -18,6 +18,79 @@ let lastPunctText = '';
 // 或停止后字幕被迟到的标点结果"复活"。
 let punctEpoch = 0;
 
+// ---- 实时翻译（离线，worker 内跑 transformers.js）----
+// 模型由用户在面板选目录读入 IndexedDB，worker 内重写 fetch 从 IndexedDB 取文件，
+// 全程零网络零权限；翻译推理在独立 worker 线程，不阻塞本线程的音频泵/ASR。
+// 流式口径：识别流每变一次就翻译一次（翻译一次进入下一次），靠 in-flight 串行化——
+// 同一时刻只允许一条在途，完成后立即翻最新文本，不重复翻相同文本。
+let translateWorker: Worker | null = null;
+let translateEnabled = false;
+let translateDirection: 'auto' | 'zh-en' | 'en-zh' = 'auto';
+let translateWarned = false;
+let transInFlight = false;
+let transPending: string | null = null;
+let transLastSent = '';
+
+function ensureTranslateWorker() {
+  if (translateWorker || !translateEnabled) return;
+  try {
+    translateWorker = new Worker(chrome.runtime.getURL('translation-worker.js'));
+    translateWorker.onmessage = (e) => {
+      const m = (e.data || {}) as any;
+      if (m.type !== 'TRANSLATION') return;
+      if (m.ok && m.text) {
+        if (m.kind === 'final') sendSafe('FW_CT', { type: 'TRANSLATION_FINAL', text: m.text });
+        else sendSafe('FW_CT', { type: 'TRANSLATION', text: m.text });
+      } else if (m.reason === 'no-model' && !translateWarned) {
+        translateWarned = true;
+        log('翻译不可用：未检测到翻译模型。请在扩展面板"实时翻译"中点击"选择模型"安装官方模型包（github.com/huchangzhi/easysub/releases）');
+      } else if (m.error && !translateWarned) {
+        translateWarned = true;
+        log('翻译出错: ' + m.error);
+      }
+      if (m.kind !== 'final') {
+        transInFlight = false;
+        pumpTranslate();
+      }
+    };
+  } catch (e) {
+    log('翻译 worker 创建失败: ' + e);
+  }
+}
+
+function destroyTranslateWorker() {
+  translateWorker?.terminate();
+  translateWorker = null;
+  translateWarned = false;
+  transInFlight = false;
+  transPending = null;
+  transLastSent = '';
+}
+
+function pumpTranslate() {
+  if (!translateWorker || !translateEnabled || transInFlight || !transPending) return;
+  const t = transPending;
+  transPending = null;
+  transInFlight = true;
+  transLastSent = t;
+  translateWorker.postMessage({ type: 'TRANSLATE', text: t, direction: translateDirection, kind: 'stream' });
+}
+
+// 流式：识别文本变化即入队翻译（同一文本不重复翻）
+function translateStream(text: string) {
+  if (!translateEnabled || !translateWorker || !text) return;
+  if (text === transLastSent) return;
+  transPending = text;
+  pumpTranslate();
+}
+
+// 定稿：句子结束翻一次并记录（丢弃尚未翻译的流式文本，避免串句）
+function translateFinal(text: string) {
+  if (!translateEnabled || !translateWorker || !text) return;
+  transPending = null;
+  translateWorker.postMessage({ type: 'TRANSLATE', text, direction: translateDirection, kind: 'final' });
+}
+
 // ---- 识别延迟测量（LATENCY_UPDATE 测量端）----
 // 指标口径：latEmaMs = 「flush 往返延迟 RTT + 本块同步处理耗时」的指数滑动平均（α=0.2）。
 // - RTT：flush 指令发出（主线程）→ worklet 回包到达（主线程）。worklet 侧拼缓冲极快，
@@ -241,6 +314,13 @@ function setupPort() {
       pipeline?.stop();
       pipeline = null;
 
+      // 翻译开关/方向由 background 在 INIT 时从 storage 读出随消息带来
+      // （offscreen 文档无 chrome.storage 访问权，只能靠 bg 转发）；下次启动会话时生效。
+      translateEnabled = msg.translationEnabled === true;
+      translateDirection = msg.translationDirection === 'zh-en' || msg.translationDirection === 'en-zh'
+        ? msg.translationDirection : 'auto';
+      if (translateEnabled) ensureTranslateWorker();
+
       // 坑：跨会话残留的文本状态会让新会话开头闪出上一场的字幕；这里全部清零，
       // 并递增标点代次使所有在途的标点延迟回调失效（回调内部会校验代次）。
       lastText = '';
@@ -285,6 +365,7 @@ function setupPort() {
             sendSafe('FW_CT', { type: 'TEXT_CHANGED', text })
             sendSafe('FW_POP', { type: 'TEXT_CHANGED', text })
           }
+          translateStream(text);
         },
         onSentenceDone: (text) => {
           // ponytail: addPunctuation 同步调 CT-Transformer 模型推理，会阻塞主线程
@@ -295,6 +376,7 @@ function setupPort() {
           sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: '' });
           sendSafe('FW_CT', { type: 'SENTENCE_DONE', text: prevSentence, isFinal: true });
           sendSafe('FW_POP', { type: 'SENTENCE_DONE', text: prevSentence });
+          translateFinal(prevSentence);
         },
         onStatusChanged: (status) => {
           sendSafe('FW_POP', { type: 'STATUS_CHANGED', status: JobStatus[status] });
@@ -378,6 +460,8 @@ function setupPort() {
       reconnectTabId = null;
       reconnectStreamId = null;
       stopAudio();
+      destroyTranslateWorker();
+      translateEnabled = false;
       pipeline?.stop();
       pipeline = null;
       // 坑：停止同样要作废在途的标点延迟回调，否则迟到的标点结果会把已清空的

@@ -8,6 +8,7 @@ console.log('[TM Content] loaded');
 let overlay: HTMLDivElement | null = null;
 let prevEl: HTMLDivElement | null = null;
 let textEl: HTMLDivElement | null = null;
+let transEl: HTMLDivElement | null = null; // 实时翻译行（可选，位于当前句下方）
 let lockBtn: HTMLButtonElement | null = null;
 let _locked = false;
 let _showPrev = true;
@@ -147,9 +148,21 @@ function create() {
       // ponytail: _pendingText 处理 TEXT_CHANGED 先于 overlay 创建（重连时），create 后立即替换
       if (_pendingText) { textEl.textContent = _pendingText; _pendingText = ''; }
     }
+    if (transEl) {
+      transEl.style.fontSize = Math.round(fs * 0.6) + 'px';
+      transEl.style.textShadow = subtitleShadow();
+    }
   });
   overlay.appendChild(prevEl);
   overlay.appendChild(textEl);
+
+  // 翻译行：跟随字幕字号缩放、随外观模式取描边阴影；无翻译时隐藏不占位
+  transEl = document.createElement('div');
+  transEl.style.cssText = [
+    'color:#8ec9ff;font-weight:500;line-height:1.4;margin-top:2px;',
+    'word-break:break-word;display:none;',
+  ].join('');
+  overlay.appendChild(transEl);
 
   addLockButton();
   // 开关默认开，先按内存偏好挂载；prefs 异步到达后 applyFeatureToggles 会校正
@@ -160,7 +173,7 @@ function create() {
   applyLock();
   // 兜底：清掉历史副本可能残留的同 id 节点（如扩展重载前的旧实例），防止视觉上叠加
   document.getElementById('tmspeech-overlay')?.remove();
-  document.body.appendChild(overlay);
+  mountOverlay();
 
   chrome.storage.local.get(STORAGE_KEY).then(stored => {
     if (!overlay) return;
@@ -433,7 +446,7 @@ function paintOverlayChrome() {
   }
   // 文字描边随模式同步（prevEl/textEl 可能尚未建好，判空即可）
   const shadow = `text-shadow:${subtitleShadow()};`;
-  for (const el of [prevEl, textEl]) {
+  for (const el of [prevEl, textEl, transEl]) {
     if (!el) continue;
     el.style.cssText = el.style.cssText.replace(/text-shadow:[^;]*;?/, shadow);
   }
@@ -508,10 +521,33 @@ function addDragListeners() {
   overlay.onpointercancel = () => { dragState = null; };
 }
 
+// —— 全屏挂载 ——
+// 坑：页面进 HTML5 全屏后，浏览器只绘制全屏元素，body 下其他节点（含本叠层）一律不渲染，
+// 于是 bilibili 等站全屏视频时字幕被盖掉。必须把叠层迁进 document.fullscreenElement。
+// media 元素 append 子节点会被当作回退内容忽略，故就近挂到其祖先容器。
+// position:fixed 不随父容器变化，而全屏元素总是铺满视口，left/top 坐标语义不变，
+// 已保存的拖拽位置无需换算。
+function fullscreenMount(): HTMLElement {
+  let el: HTMLElement | null = document.fullscreenElement as HTMLElement | null;
+  while (el && /^(VIDEO|AUDIO|IFRAME|EMBED|OBJECT)$/.test(el.tagName)) {
+    el = el.parentElement;
+  }
+  return el || document.body;
+}
+
+function mountOverlay() {
+  if (!overlay) return;
+  fullscreenMount().appendChild(overlay);
+}
+
+// 进/出全屏时迁移挂载点（重复副本各自注册，appendChild 幂等，仅一层叠层）
+document.addEventListener('fullscreenchange', mountOverlay);
+
 function destroy() {
   if (!overlay) return;
   const el = overlay;
   overlay = null; prevEl = null; textEl = null; lockBtn = null;
+  transEl = null;
   // 回看 UI 随叠层销毁；reviewOpen 复位，避免下次 create 误判展开态。
   reviewBtn = null; reviewPanel = null; reviewOpen = false;
   if (reviewCloseTimer) { clearTimeout(reviewCloseTimer); reviewCloseTimer = null; }
@@ -602,6 +638,26 @@ chrome.runtime.onMessage.addListener((msg) => {
         if (recentSentences.length > RECENT_MAX) recentSentences.length = RECENT_MAX;
       }
       break;
+    case 'TRANSLATION':
+      // 流式翻译：即时刷新翻译行（定稿句的译文由 TRANSLATION_FINAL 负责）
+      if (transEl && msg.text) {
+        transEl.textContent = msg.text;
+        transEl.style.display = '';
+      }
+      break;
+    case 'TRANSLATION_FINAL':
+      // 定稿译文：刷新翻译行并记入回看缓冲，随原句一起回看
+      if (msg.text) {
+        if (transEl) {
+          transEl.textContent = msg.text;
+          transEl.style.display = '';
+        }
+        if (_lookbackEnabled) {
+          recentSentences.unshift(String(msg.text));
+          if (recentSentences.length > RECENT_MAX) recentSentences.length = RECENT_MAX;
+        }
+      }
+      break;
     case 'LATENCY_UPDATE':
       // auditor-audio 的测量端约 2s 一条（仅 Running 时发送），经 bg 现有 FW_CT 路由到达。
       // 只在此处更新文本/颜色，不新增任何定时器；会话停止走 destroy() 清数据不残留。
@@ -631,6 +687,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'SET_FONT_SIZE':
       if (prevEl) { prevEl.style.fontSize = msg.fontSize + 'px'; }
       if (textEl) { textEl.style.fontSize = msg.fontSize + 'px'; scheduleSave(); }
+      if (transEl) { transEl.style.fontSize = Math.round(msg.fontSize * 0.6) + 'px'; }
       break;
     case 'SET_PREV_OPTS':
       _showPrev = msg.showPrev;

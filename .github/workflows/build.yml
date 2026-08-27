@@ -119,6 +119,33 @@ jobs:
           cd dist-lite
           zip -r ../easysub-v${{ github.event.inputs.version }}-lite.zip .
 
+      - name: Package translation models
+        run: |
+          python3 -m pip install -q --user huggingface_hub
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import hf_hub_download
+          pairs = [
+              ('Xenova/opus-mt-en-zh', 'opus-mt-en-zh'),
+              ('Xenova/opus-mt-zh-en', 'opus-mt-zh-en'),
+          ]
+          files = [
+              'config.json', 'generation_config.json', 'tokenizer.json',
+              'tokenizer_config.json', 'special_tokens_map.json', 'quantize_config.json',
+              'source.spm', 'target.spm', 'vocab.json',
+              'onnx/encoder_model_quantized.onnx',
+              'onnx/decoder_model_merged_quantized.onnx',
+          ]
+          for repo, local in pairs:
+              for f in files:
+                  p = hf_hub_download(repo, f)
+                  dst = os.path.join(local, f)
+                  os.makedirs(os.path.dirname(dst), exist_ok=True)
+                  os.replace(p, dst)
+          PY
+          zip -r ../easysub-translation-models-v${{ github.event.inputs.version }}.zip opus-mt-en-zh opus-mt-zh-en
+          ls -lh ../easysub-translation-models-v${{ github.event.inputs.version }}.zip
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -137,9 +164,20 @@ jobs:
             - 大小: ~150MB
             - 体积更小、速度更快，适合资源受限的场景
 
+            ### 实时翻译模型（可选，离线，约 216MB）
+            启用面板"实时翻译"需要下载此模型包：
+            `easysub-translation-models-v${{ github.event.inputs.version }}.zip`
+
+            安装步骤：
+            1. 下载并解压上方的 easysub-translation-models 压缩包
+            2. 打开扩展面板 → 「实时翻译」→ 勾选「启用翻译」
+            3. 点击「选择模型」，选中解压出的 `opus-mt-en-zh` / `opus-mt-zh-en` 所在的父文件夹
+            4. 重新开始一次识别会话生效（翻译在本地离线进行，不上传任何内容）
+
             Chrome → 扩展程序 → 加载已解压的扩展 → 选择解压后的目录
           files: |
             easysub-v${{ github.event.inputs.version }}-full.zip
             easysub-v${{ github.event.inputs.version }}-lite.zip
+            easysub-translation-models-v${{ github.event.inputs.version }}.zip
           draft: false
           prerelease: false

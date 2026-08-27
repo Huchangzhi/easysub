@@ -1,4 +1,5 @@
 import { getLang, setLang, tSync } from './i18n';
+import { listModelKeys, saveModelFile, clearModels } from './model-db';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -43,6 +44,14 @@ const waveCanvas = $('waveCanvas') as HTMLCanvasElement;
 const chkWaveform = $('chkWaveform') as HTMLInputElement;
 // —— 时间戳显示开关 ——
 const chkShowTs = $('chkShowTs') as HTMLInputElement;
+// —— 实时翻译（离线自带模型）——
+const chkTranslate = $('chkTranslate') as HTMLInputElement;
+const btnPickModel = $('btnPickModel') as HTMLButtonElement;
+const modelFolderPicker = $('modelFolderPicker') as HTMLInputElement;
+const translateNotice = $('translateNotice');
+const translateStatus = $('translateStatus');
+const translateDirRow = $('translateDirRow');
+const TRANSLATE_RELEASES_URL = 'https://github.com/huchangzhi/easysub/releases';
 
 let locked = false;
 let lastStatus = 'Stopped';
@@ -126,6 +135,13 @@ async function applyLang() {
  // 全部停止刷新，表现为「英文界面下深浅模式 ? 气泡仍是中文」。两行已删，
   // 文案由上方 [data-key] 通用循环正确覆盖；新增 $() 引用时务必复跑 id 存在性比对。
   $('helpTipColorMode').textContent = tr('helpColorMode');
+  // —— 实时翻译文案随语言切换（方向选项走上方 [data-key] 通用循环）——
+  $('secTranslate').textContent = tr('secTranslate');
+  $('showTranslate').textContent = tr('showTranslate');
+  $('pickModelLabel').textContent = tr('pickModel');
+  $('helpTipTranslate').textContent = tr('helpTranslate');
+  buildTranslateNotice();
+  refreshTranslateStatus();
   updateBgSchemeNames(); // 背景方案名按当前模式+语言刷新（t31，见函数内坑注）
   // Hero 大状态词也要跟随语言刷新（依据最近一次状态与是否启动过）
   statusWordEl.textContent = tSync(currentLang,
@@ -171,6 +187,11 @@ async function loadPrefs() {
   updateWaveVisibility();
   // 时间戳显示默认开；切换只影响 popup 渲染，不进 FORWARD 链路
   chkShowTs.checked = prefs.showTimestamps !== false;
+  // 实时翻译：开关默认关（=== true 才开）；方向白名单校验，非法值回退 auto
+  chkTranslate.checked = prefs.translationEnabled === true;
+  const tdir = prefs.translationDirection;
+  applyTranslateDir(TRANSLATE_DIRS.includes(tdir) ? tdir : 'auto');
+  updateTranslateUi();
   const po = prefs.prevOpacity ?? 35;
   prevOpacitySlider.value = String(po);
   prevOpacityLabel.textContent = String(po);
@@ -696,6 +717,77 @@ chkLatency.onchange = () => {
   }).catch(() => {});
 };
 
+// —— 实时翻译（离线自带模型）：方向选择 / 模型选择 / 下载指引 ——
+const TRANSLATE_DIRS = ['auto', 'zh-en', 'en-zh'];
+
+function applyTranslateDir(dir: string) {
+  document.querySelectorAll<HTMLButtonElement>('#translateDirRow .seg').forEach(b => {
+    const on = b.dataset.dir === dir;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', String(on));
+  });
+}
+
+document.querySelectorAll<HTMLButtonElement>('#translateDirRow .seg').forEach(b => {
+  b.onclick = () => {
+    const d = b.dataset.dir!;
+    applyTranslateDir(d);
+    savePrefs({ translationDirection: d });
+  };
+});
+
+function buildTranslateNotice() {
+  translateNotice.textContent = '';
+  translateNotice.appendChild(document.createTextNode(tSync(currentLang, 'translateNeedModel') + ' '));
+  const link = document.createElement('a');
+  link.href = TRANSLATE_RELEASES_URL;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.textContent = tSync(currentLang, 'openReleases');
+  translateNotice.appendChild(link);
+}
+
+async function refreshTranslateStatus() {
+  try {
+    const keys = await listModelKeys();
+    translateStatus.textContent = keys.length > 0
+      ? tSync(currentLang, 'modelLoaded').replace('{n}', String(keys.length))
+      : tSync(currentLang, 'modelMissing');
+  } catch {
+    translateStatus.textContent = tSync(currentLang, 'modelMissing');
+  }
+}
+
+function updateTranslateUi() {
+  translateDirRow.style.display = chkTranslate.checked ? '' : 'none';
+  translateNotice.style.display = chkTranslate.checked ? '' : 'none';
+  if (chkTranslate.checked) buildTranslateNotice();
+}
+
+chkTranslate.onchange = () => {
+  savePrefs({ translationEnabled: chkTranslate.checked });
+  updateTranslateUi();
+};
+
+btnPickModel.onclick = () => modelFolderPicker.click();
+
+modelFolderPicker.onchange = async () => {
+  const files = modelFolderPicker.files;
+  if (!files || files.length === 0) return;
+  try {
+    await clearModels();
+    let n = 0;
+    for (const f of Array.from(files)) {
+      await saveModelFile(f.webkitRelativePath, await f.arrayBuffer());
+      n++;
+    }
+    translateStatus.textContent = tSync(currentLang, 'modelLoaded').replace('{n}', String(n));
+  } catch (e: any) {
+    log(tSync(currentLang, 'errorPrefix').replace('{m}', String(e?.message || e)));
+  }
+  modelFolderPicker.value = '';
+};
+
 chrome.runtime.onMessage.addListener((msg) => {
   switch (msg.type) {
     case 'TEXT_CHANGED':
@@ -747,6 +839,7 @@ function escapeHtml(s: string): string {
 }
 
 loadPrefs().then(initRangeFills); // storage 值写回滑杆后再刷填充色
+refreshTranslateStatus(); // 独立于 prefs，直接查 IndexedDB 模型安装状态
 loadTranscript();
 applyLang();
 chrome.storage.local.get('tmspeech_use_punct').then(r => {

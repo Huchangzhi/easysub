@@ -382,6 +382,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (prefs.endpointRule1) initMsg.endpointRule1 = prefs.endpointRule1;
       if (prefs.endpointRule2) initMsg.endpointRule2 = prefs.endpointRule2;
       if (prefs.endpointRule3) initMsg.endpointRule3 = prefs.endpointRule3;
+      // 实时翻译开关/方向随 INIT 下发（offscreen 无 chrome.storage 访问权，由 bg 转发）
+      initMsg.translationEnabled = prefs.translationEnabled === true;
+      const tdir = prefs.translationDirection;
+      initMsg.translationDirection = tdir === 'zh-en' || tdir === 'en-zh' ? tdir : 'auto';
       if (offscreenPort) {
         offscreenPort.postMessage(initMsg);
       } else {

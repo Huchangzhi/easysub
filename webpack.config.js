@@ -8,6 +8,7 @@ module.exports = {
     content: './src/content.ts',
     popup: './src/popup.ts',
     offscreen: './src/offscreen.ts',
+    'translation-worker': './src/translation-worker.ts',
     permission: './src/permission.ts',
     i18n: './src/i18n.ts', // ponytail: 纯导出模块做 entry 生成孤立 i18n.js，不被任何页面引用
   },
@@ -16,7 +17,15 @@ module.exports = {
       { test: /\.tsx?$/, use: 'ts-loader', exclude: /node_modules/ },
     ],
   },
-  resolve: { extensions: ['.tsx', '.ts', '.js'] },
+  resolve: {
+    extensions: ['.tsx', '.ts', '.js'],
+    alias: {
+      // 坑：@huggingface/transformers 的 exports 指向预打包的 transformers.web.js，
+      // 它是"webpack 包套 webpack 包"，内层 publicPath 会烘焙成绝对路径，扩展里必坏。
+      // 改打包其 src 源码，让 onnxruntime-web 成为真正的依赖被 webpack 内联（无外部加载）。
+      '@huggingface/transformers': path.resolve(__dirname, 'node_modules/@huggingface/transformers/src/transformers.js'),
+    },
+  },
   output: {
     path: path.resolve(__dirname, 'dist'),
     filename: '[name].js',
@@ -28,6 +37,10 @@ module.exports = {
         { from: 'public', to: '.' },
         { from: 'manifest.json', to: '.' },
         { from: '_locales', to: '_locales' },
+        // 离线翻译运行时：onnxruntime-web 的 wasm 二进制，由翻译 worker 从 ort-wasm/ 拉取
+        { from: 'node_modules/onnxruntime-web/dist/ort-wasm*.wasm', to: 'ort-wasm/[name][ext]' },
+        // onnxruntime-web 会动态 import() 这个 ESM 运行时，URL 按 worker 自身地址解析到扩展根
+        { from: 'node_modules/onnxruntime-web/dist/ort.bundle.min.mjs', to: 'ort.bundle.min.mjs' },
       ],
     }),
     new HtmlPlugin({

@@ -16,5 +16,7 @@
     "webpack": "^5.90.0",
     "webpack-cli": "^5.1.4"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@huggingface/transformers": "^3.5.1"
+  }
 }

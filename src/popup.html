@@ -424,6 +424,16 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
   transition: color 200ms var(--ease-out);
 }
 
+/* 实时翻译提示条：启用翻译但模型未就绪时展示下载指引 */
+.translate-notice {
+  margin-top: 6px; padding: 8px 10px;
+  font-size: 12px; line-height: 1.55; color: var(--text2);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+}
+.translate-notice a { color: var(--accent); text-decoration: none; }
+.translate-notice a:hover { text-decoration: underline; }
+
 /* Text preview */
 .preview {
   background: var(--surface); border-radius: var(--radius); padding: 10px 12px;
@@ -736,6 +746,31 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
         <span class="help-tip" role="tooltip" id="helpTipLookback">点击字幕窗左上角的小箭头展开近句回看：最新一句排在最上面，越往下越早。仅存内存不落地，零常驻开销。</span>
       </span>
     </div>
+
+    <!-- —— 实时翻译（离线自带模型，设置下次启动生效）—— -->
+    <span class="section-label sub-gap" id="secTranslate">实时翻译</span>
+    <div class="row">
+      <input type="checkbox" id="chkTranslate">
+      <label for="chkTranslate" id="showTranslate">启用翻译</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnTranslate" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipTranslate">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipTranslate">把识别字幕实时翻译成另一语言。首次使用需从 GitHub Releases 下载翻译模型（中/英双向，约 216MB），解压后点击"选择模型"选中解压出的文件夹；设置从下一次启动会话生效。翻译在独立线程离线进行，不上传任何内容。</span>
+      </span>
+      <button type="button" id="btnPickModel" class="icon-btn" style="margin-left:auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span id="pickModelLabel">选择模型</span>
+      </button>
+    </div>
+    <div class="seg-row" id="translateDirRow" role="radiogroup" aria-labelledby="secTranslate">
+      <button type="button" class="seg active" data-dir="auto" role="radio" aria-checked="true"><span class="seg-name" data-key="translateAuto">自动</span></button>
+      <button type="button" class="seg" data-dir="zh-en" role="radio" aria-checked="false"><span class="seg-name" data-key="translateZhEn">中→英</span></button>
+      <button type="button" class="seg" data-dir="en-zh" role="radio" aria-checked="false"><span class="seg-name" data-key="translateEnZh">英→中</span></button>
+    </div>
+    <div class="translate-notice" id="translateNotice" style="display:none;"></div>
+    <span class="model-info" id="translateStatus"></span>
+    <input type="file" id="modelFolderPicker" webkitdirectory multiple style="display:none;">
   </div>
 
   <!-- —— B3. Bento 卡「历史记录」：检索 + 转写列表 + 复制/清空 —— -->
