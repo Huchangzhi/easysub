@@ -73,7 +73,7 @@ function pumpTranslate() {
   transPending = null;
   transInFlight = true;
   transLastSent = t;
-  translateWorker.postMessage({ type: 'TRANSLATE', text: t, direction: translateDirection, kind: 'stream' });
+  translateWorker.postMessage({ type: 'TRANSLATE', text: t, direction: translateDirection, kind: 'stream', wasmPaths: chrome.runtime.getURL('ort-wasm/') });
 }
 
 // 流式：识别文本变化即入队翻译（同一文本不重复翻）
@@ -88,7 +88,7 @@ function translateStream(text: string) {
 function translateFinal(text: string) {
   if (!translateEnabled || !translateWorker || !text) return;
   transPending = null;
-  translateWorker.postMessage({ type: 'TRANSLATE', text, direction: translateDirection, kind: 'final' });
+  translateWorker.postMessage({ type: 'TRANSLATE', text, direction: translateDirection, kind: 'final', wasmPaths: chrome.runtime.getURL('ort-wasm/') });
 }
 
 // ---- 识别延迟测量（LATENCY_UPDATE 测量端）----

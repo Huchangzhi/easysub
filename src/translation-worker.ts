@@ -15,6 +15,7 @@ const MODEL_PAIRS: Record<string, string> = {
 
 let setupDone = false;
 let setupError: string | null = null;
+let wasmPaths: string | undefined;
 const pipes: Record<string, Pipe> = {};
 
 function isCJK(text: string): boolean {
@@ -45,12 +46,13 @@ function setup() {
     env.allowRemoteModels = false;
     env.useBrowserCache = false;
     env.localModelPath = 'tmspeech://';
-    // 只跑 wasm 单线程，避免 onnxruntime-web 起 worker/proxy 撞上 MV3 CSP
+    // 只跑 wasm 单线程，避免 onnxruntime-web 起 worker/proxy 撞上 MV3 CSP。
+    // 坑：dedicated worker 没有 chrome.* API，wasmPaths 必须由 offscreen（有 chrome）解析后随消息传入。
     const wasmCfg = env.backends.onnx.wasm;
-    if (wasmCfg) {
+    if (wasmCfg && wasmPaths) {
       wasmCfg.numThreads = 1;
       wasmCfg.proxy = false;
-      wasmCfg.wasmPaths = chrome.runtime.getURL('ort-wasm/');
+      wasmCfg.wasmPaths = wasmPaths;
     }
 
     const origFetch = globalThis.fetch.bind(globalThis);
@@ -101,6 +103,7 @@ let msgId = 0;
 self.onmessage = (e: MessageEvent) => {
   const msg = e.data || {};
   if (msg.type !== 'TRANSLATE') return;
+  if (msg.wasmPaths) wasmPaths = msg.wasmPaths;
   const id = ++msgId;
   const kind = msg.kind === 'final' ? 'final' : 'stream';
   (async () => {
