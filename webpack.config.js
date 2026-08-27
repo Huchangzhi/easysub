@@ -1,4 +1,5 @@
 const path = require('path');
+const webpack = require('webpack');
 const CopyPlugin = require('copy-webpack-plugin');
 const HtmlPlugin = require('html-webpack-plugin');
 
@@ -59,6 +60,17 @@ module.exports = {
       template: 'src/permission.html',
       filename: 'permission.html',
       chunks: ['permission'],
+    }),
+    // ponytail: transformers src/env.js 用 import.meta，webpack 5.87+ 把它替换成
+    // { url, webpack:5, main: __webpack_module__===... }，而经典 worker（非 ESM 输出）
+    // 不定义 __webpack_module__ 直接 ReferenceError。注入一个变量即可；
+    // 其 url 被烘焙成 file:///E:/... 只喂 cacheDir/localModelPath 默认值，
+    // worker 里已用显式 wasmPaths/localModelPath/useBrowserCache 覆盖，无害。
+    new webpack.BannerPlugin({
+      banner: 'var __webpack_module__;',
+      raw: true,
+      entryOnly: true,
+      test: /translation-worker/,
     }),
   ],
 };
