@@ -59,13 +59,37 @@ const TRANSCRIPT_MAX = 1000;
 let transcriptQueue: Promise<void> = Promise.resolve();
 // 条目契约：{ text: string, ts: number }。ts=Date.now()（句完成时刻）；
 // ts=0 是"legacy 无时标"的哨兵值——popup 显示/导出侧据此决定是否渲染时间戳。
-type TranscriptEntry = { text: string; ts: number };
+// tr?: 该句定稿译文，由 TRANSLATION_FINAL 在换句后挂到末条原句上，供历史列表显示。
+type TranscriptEntry = { text: string; ts: number; tr?: string };
 function normalizeTranscriptEntry(entry: unknown): TranscriptEntry {
   // 坑：legacy 格式原因——旧版本把转写存成纯字符串数组且无迁移脚本，升级后存储里
   // 会长期残留字符串条目。所有读取点必须做 typeof entry === 'string' 的懒归一化
   // （归一化结果随后随整组写回，老数据在首次追加后即被逐步原地迁移），否则显示侧
   // 读到 .text/.ts 属性就是 undefined，直接炸 UI。
-  return typeof entry === 'string' ? { text: entry, ts: 0 } : (entry as TranscriptEntry);
+  if (typeof entry === 'string') return { text: entry, ts: 0 };
+  const e = entry as Partial<TranscriptEntry>;
+  return {
+    text: typeof e.text === 'string' ? e.text : '',
+    ts: typeof e.ts === 'number' ? e.ts : 0,
+    tr: typeof e.tr === 'string' && e.tr ? e.tr : undefined,
+  };
+}
+
+// 换句后的定稿译文挂到历史末条原句上（正常时序下该句刚被 SENTENCE_DONE 追加）。
+// 走同一串行队列，避免与 appendTranscript 的读改写并发互相覆盖丢数据。
+function attachTranscriptTranslation(text: string) {
+  if (!text) return;
+  transcriptQueue = transcriptQueue.then(async () => {
+    try {
+      const r = await chrome.storage.local.get(TRANSCRIPT_KEY);
+      const arr = ((r[TRANSCRIPT_KEY] as unknown[]) || []).map(normalizeTranscriptEntry);
+      const last = arr[arr.length - 1];
+      if (last && !last.tr) last.tr = String(text);
+      await chrome.storage.local.set({ [TRANSCRIPT_KEY]: arr });
+    } catch (e) {
+      console.log('[TM BG] 转写译文持久化失败:', e);
+    }
+  });
 }
 
 function appendTranscript(text: string, ts: number = Date.now()) {
@@ -102,11 +126,28 @@ chrome.runtime.onConnect.addListener((port) => {
   offscreenPort = port;
 
   port.onMessage.addListener((msg) => {
+    if (msg.type === 'TRANSLATE_TEST_RESULT') {
+      // 面板"测试翻译"的一次性应答：按 id 回给发起方 sendResponse。
+      // 坑：offscreen 经 sendSafe() 发送，实际结构是 {type, payload:{id,...}}，必须从 payload 取值
+      const p = msg.payload || {};
+      const cb = translateTestResolvers[p.id];
+      delete translateTestResolvers[p.id];
+      if (cb) cb({ ok: p.ok, text: p.text, error: p.error, debug: p.debug });
+      // 测试是临时拉的 offscreen：若当前无识别会话，出结果后立即关闭文档（连带回收翻译 worker）
+      if (pipelineStatus !== 'Running') {
+        chrome.offscreen.closeDocument().catch(() => {});
+      }
+      return;
+    }
     if (msg.type === 'FW_CT' && captureTabId) {
       sendToTab(captureTabId, msg.payload);
     }
     if (msg.type === 'FW_POP') {
       const p = msg.payload || {};
+      // 定稿译文：offscreen 每句完成时经 FW_POP 送来，挂到历史末条原句；同时照常转发 popup
+      if (p.type === 'TRANSLATION_FINAL') {
+        attachTranscriptTranslation(p.text);
+      }
       if (p.type === 'STATUS_CHANGED') {
         pipelineStatus = p.status;
         // 坑：offscreen 不知道会话何时开始（尤其 SW 重启后 RECONNECT 自愈恢复的
@@ -308,7 +349,29 @@ async function handleCapturedTabClosed(closedTabId: number) {
   cleanupAll();
 }
 
+let translateTestSeq = 0;
+const translateTestResolvers: Record<number, (r: any) => void> = {};
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === 'TRANSLATE_TEST') {
+    // 面板"测试翻译"：转发给 offscreen（无 storage 权限，纯中继），用 id 关联应答。
+    // 没在识别时 offscreen 文档不存在（offscreenPort 为空），先建文档等端口连上再发。
+    (async () => {
+      if (!offscreenPort) {
+        await ensureOffscreen().catch(() => {});
+        const deadline = Date.now() + 8000;
+        while (!offscreenPort && Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 100));
+        }
+      }
+      if (!offscreenPort) { sendResponse({ ok: false, error: 'offscreen-not-ready' }); return; }
+      const id = ++translateTestSeq;
+      translateTestResolvers[id] = sendResponse;
+      offscreenPort.postMessage({ type: 'TRANSLATE_TEST', id, text: msg.text, direction: msg.direction });
+    })();
+    return true;
+  }
+
   if (msg.type === 'START_RECOGNITION') {
     (async () => {
       // 坑：上一会话可能刚被"关标签页自动停止"清理，其 closeDocument 是异步生效的；

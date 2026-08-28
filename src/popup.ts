@@ -46,7 +46,10 @@ const chkWaveform = $('chkWaveform') as HTMLInputElement;
 const chkShowTs = $('chkShowTs') as HTMLInputElement;
 // —— 实时翻译（离线自带模型）——
 const chkTranslate = $('chkTranslate') as HTMLInputElement;
+// —— 历史字幕显示译文开关 ——
+const chkTranscriptTr = $('chkTranscriptTr') as HTMLInputElement;
 const btnPickModel = $('btnPickModel') as HTMLButtonElement;
+const btnTestTranslate = $('btnTestTranslate') as HTMLButtonElement;
 const modelFolderPicker = $('modelFolderPicker') as HTMLInputElement;
 const translateNotice = $('translateNotice');
 const translateStatus = $('translateStatus');
@@ -59,7 +62,7 @@ let hasStarted = false; // 是否启动过识别：区分 Hero 卡「待命」�
 let currentLang = 'zh_CN';
 // 坑：t19 起存储契约升级为 {text, ts}（ts=Date.now()，0=legacy 无时标哨兵）——
 // 读取必须做 string→{text,ts:0} 懒归一化（bg 同款逻辑），否则 .text/.ts 是 undefined 直接炸 UI
-interface TranscriptEntry { text: string; ts: number }
+interface TranscriptEntry { text: string; ts: number; tr?: string }
 let transcriptEntries: TranscriptEntry[] = [];
 const PREFS_KEY = 'tmspeech_prefs';
 const TRANSCRIPT_KEY = 'tmspeech_transcript';
@@ -121,6 +124,7 @@ async function applyLang() {
   $('showWaveform').textContent = tr('showWaveform');
   $('helpTipWaveform').textContent = tr('helpWaveform');
   $('showTimestamps').textContent = tr('showTimestamps');
+  $('showTrInHistory').textContent = tr('showTrInHistory');
   $('helpTipTimestamps').textContent = tr('helpTimestamps');
   $('helpTipAppearance').textContent = tr('helpAppearance');
   $('helpTipOverlayBg').textContent = tr('helpOverlayBg');
@@ -138,7 +142,9 @@ async function applyLang() {
   // —— 实时翻译文案随语言切换（方向选项走上方 [data-key] 通用循环）——
   $('secTranslate').textContent = tr('secTranslate');
   $('showTranslate').textContent = tr('showTranslate');
+  $('experimentalLabel').textContent = tr('experimentalBadge');
   $('pickModelLabel').textContent = tr('pickModel');
+  $('testTranslateLabel').textContent = tr('testTranslate');
   $('helpTipTranslate').textContent = tr('helpTranslate');
   buildTranslateNotice();
   refreshTranslateStatus();
@@ -192,6 +198,8 @@ async function loadPrefs() {
   const tdir = prefs.translationDirection;
   applyTranslateDir(TRANSLATE_DIRS.includes(tdir) ? tdir : 'auto');
   updateTranslateUi();
+  // 历史字幕显示译文：默认开（!== false）
+  chkTranscriptTr.checked = prefs.transcriptTrEnabled !== false;
   const po = prefs.prevOpacity ?? 35;
   prevOpacitySlider.value = String(po);
   prevOpacityLabel.textContent = String(po);
@@ -399,6 +407,12 @@ chkShowTs.onchange = () => {
   renderTranscript();
 };
 
+chkTranscriptTr.onchange = () => {
+  // 同上：只影响 popup 渲染层，译文已在 background 落库，切换即时重渲染
+  savePrefs({ transcriptTrEnabled: chkTranscriptTr.checked });
+  renderTranscript();
+};
+
 // —— 会话计时：全面板仅此一个 interval ——
 let timerId: number | undefined = undefined;
 let runStartTs = 0;
@@ -526,9 +540,15 @@ async function loadTranscript() {
   const r = await chrome.storage.local.get(TRANSCRIPT_KEY);
   // 坑：legacy 纯字符串与新版 {text,ts} 可能混存，读取必须懒归一化（同 bg 逻辑），
   // 否则老用户升级后首次打开 popup 就在渲染层炸 undefined
-  transcriptEntries = ((r[TRANSCRIPT_KEY] as unknown[]) || []).map(e =>
-    typeof e === 'string' ? { text: e, ts: 0 } : { text: String((e as any)?.text ?? ''), ts: Number((e as any)?.ts) || 0 }
-  );
+  transcriptEntries = ((r[TRANSCRIPT_KEY] as unknown[]) || []).map(e => {
+    if (typeof e === 'string') return { text: e, ts: 0 };
+    const o = e as any;
+    return {
+      text: String(o?.text ?? ''),
+      ts: Number(o?.ts) || 0,
+      tr: typeof o?.tr === 'string' && o.tr ? o.tr : undefined,
+    };
+  });
   renderTranscript();
 }
 
@@ -565,7 +585,7 @@ function renderTranscript() {
   ).join('');
 }
 
-// 单条渲染：时间戳（相对本会话第一条带时标条目的 [mm:ss] 偏移）+ 正文
+// 单条渲染：时间戳（相对本会话第一条带时标条目的 [mm:ss] 偏移）+ 正文 +（开关开启时的）译文
 function renderEntryHtml(entry: TranscriptEntry, q?: string): string {
   // 坑：origin 曾取 transcriptEntries[0].ts——升级用户的存储里首条往往是 legacy(ts=0)，
   // 会把整个列表的时间戳全部误伤抑制。改为取首条 ts>0 的条目做会话零点；
@@ -579,6 +599,10 @@ function renderEntryHtml(entry: TranscriptEntry, q?: string): string {
     html += `<span class="entry-ts">[${mm}:${ss}]</span> `;
   }
   html += (q ? highlightEntry(entry.text, q) : escapeHtml(entry.text));
+  // 译文：独立一行小字（蓝灰），由历史设置开关控制显隐
+  if (chkTranscriptTr.checked && entry.tr) {
+    html += `<div class="entry-tr">${escapeHtml(entry.tr)}</div>`;
+  }
   return html;
 }
 
@@ -616,8 +640,10 @@ btnSearchClear.onclick = () => {
 };
 
 btnCopy.onclick = async () => {
-  // 复制只拼纯文本，不带时间戳（时标仅用于屏上回看）
-  const text = transcriptEntries.map(t => t.text).join('\n');
+  // 复制只拼纯文本，不带时间戳（时标仅用于屏上回看）；
+  // 勾选"历史字幕显示翻译"时顺带把译文跟在其原句后一行
+  const lines = transcriptEntries.map(t => chkTranscriptTr.checked && t.tr ? `${t.text}\n${t.tr}` : t.text);
+  const text = lines.join('\n');
   if (!text) return;
   await navigator.clipboard.writeText(text);
   const label = $('copyLabel');
@@ -771,6 +797,48 @@ chkTranslate.onchange = () => {
 
 btnPickModel.onclick = () => modelFolderPicker.click();
 
+// 测试翻译：按当前方向发一次真实翻译请求，走 bg → offscreen → worker 全链路
+function activeTranslateDir(): string {
+  return document.querySelector<HTMLButtonElement>('#translateDirRow .seg.active')?.dataset.dir || 'auto';
+}
+
+let translateTesting = false;
+let translateTestCancelled = false;
+
+btnTestTranslate.onclick = async () => {
+  if (translateTesting) {
+    // 二次点击 = 取消：终止测试 worker（若为测试临时创建的），释放 CPU
+    translateTestCancelled = true;
+    chrome.runtime.sendMessage({ type: 'TRANSLATE_TEST_CANCEL' }).catch(() => {});
+    translateTesting = false;
+    $('testTranslateLabel').textContent = tSync(currentLang, 'testTranslate');
+    translateStatus.textContent = tSync(currentLang, 'translateTestCancelled');
+    return;
+  }
+  translateTesting = true;
+  translateTestCancelled = false;
+  const dir = activeTranslateDir();
+  const sample = dir === 'en-zh' ? 'Hello world!' : '你好，世界！';
+  $('testTranslateLabel').textContent = tSync(currentLang, 'translateTestCancel');
+  translateStatus.textContent = tSync(currentLang, 'translateTesting');
+  let r: any = null;
+  try {
+    r = await chrome.runtime.sendMessage({ type: 'TRANSLATE_TEST', text: sample, direction: dir });
+  } catch { r = null; }
+  translateTesting = false;
+  if (translateTestCancelled) return;
+  $('testTranslateLabel').textContent = tSync(currentLang, 'testTranslate');
+  if (!r || typeof r.ok !== 'boolean') {
+    translateStatus.textContent = tSync(currentLang, 'translateTestFail');
+  } else if (r.ok) {
+    translateStatus.textContent = tSync(currentLang, 'translateTestOk').replace('{t}', String(r.text ?? ''));
+  } else if (r.error === 'no-model') {
+    translateStatus.textContent = tSync(currentLang, 'translateTestNoModel');
+  } else {
+    translateStatus.textContent = tSync(currentLang, 'translateTestError').replace('{m}', String(r.error || ''));
+  }
+};
+
 modelFolderPicker.onchange = async () => {
   const files = modelFolderPicker.files;
   if (!files || files.length === 0) return;
@@ -778,7 +846,13 @@ modelFolderPicker.onchange = async () => {
     await clearModels();
     let n = 0;
     for (const f of Array.from(files)) {
-      await saveModelFile(f.webkitRelativePath, await f.arrayBuffer());
+      // webkitRelativePath 形如 `<选中文件夹>/opus-mt-en-zh/config.json`，
+      // 存库时去掉选中文件夹前缀、以模型目录（opus-mt-en-zh/opus-mt-zh-en）为根，
+      // 否则 worker 按 `opus-mt-en-zh/...` 匹配不到。
+      const parts = f.webkitRelativePath.split('/');
+      const modelIdx = parts.findIndex(p => p === 'opus-mt-en-zh' || p === 'opus-mt-zh-en');
+      const key = (modelIdx >= 0 ? parts.slice(modelIdx) : parts.slice(1)).join('/');
+      await saveModelFile(key, await f.arrayBuffer());
       n++;
     }
     translateStatus.textContent = tSync(currentLang, 'modelLoaded').replace('{n}', String(n));
@@ -805,6 +879,16 @@ chrome.runtime.onMessage.addListener((msg) => {
       renderTranscript();
       break;
     }
+    case 'TRANSLATION_FINAL':
+      // 定稿译文：bg 在持久化历史的同时转发一份，挂在刚入列的末条原句上即时渲染
+      // （正常时序下该句是当前会话最后一条，但历史里可能已有本会话前的条目，
+      // 因此严格取"列表末尾"而非 transcriptEntries[transcriptEntries.length-1]）
+      if (msg.text) {
+        const last = transcriptEntries[transcriptEntries.length - 1];
+        if (last && !last.tr) last.tr = String(msg.text);
+        renderTranscript();
+      }
+      break;
     case 'LEVEL': {
       // 坑：v 可能越界/非数值（测量端异常），钳到 [0,1] 防画布炸
       const v = Math.max(0, Math.min(1, Number(msg.v) || 0));

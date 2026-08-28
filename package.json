@@ -17,6 +17,10 @@
     "webpack-cli": "^5.1.4"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.5.1"
+    "@huggingface/transformers": "^3.5.1",
+    "onnxruntime-web": "1.21.0"
+  },
+  "overrides": {
+    "onnxruntime-web": "1.21.0"
   }
 }

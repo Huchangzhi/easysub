@@ -38,8 +38,10 @@ module.exports = {
         { from: 'public', to: '.' },
         { from: 'manifest.json', to: '.' },
         { from: '_locales', to: '_locales' },
-        // 离线翻译运行时：onnxruntime-web 的 wasm 二进制，由翻译 worker 从 ort-wasm/ 拉取
-        { from: 'node_modules/onnxruntime-web/dist/ort-wasm*.wasm', to: 'ort-wasm/[name][ext]' },
+        // 离线翻译运行时：onnxruntime-web 的 wasm 二进制 + 对应的 .mjs 包装（onnxruntime
+        // 会动态 import `ort-wasm/ort-wasm-simd-threaded.jsep.mjs` 等文件，只拷 .wasm 会
+        // "Failed to fetch dynamically imported module"），统一拷全量 ort-wasm* 文件
+        { from: 'node_modules/onnxruntime-web/dist/ort-wasm*', to: 'ort-wasm/[name][ext]' },
         // onnxruntime-web 会动态 import() 这个 ESM 运行时，URL 按 worker 自身地址解析到扩展根
         { from: 'node_modules/onnxruntime-web/dist/ort.bundle.min.mjs', to: 'ort.bundle.min.mjs' },
       ],

@@ -9,16 +9,21 @@ let overlay: HTMLDivElement | null = null;
 let prevEl: HTMLDivElement | null = null;
 let textEl: HTMLDivElement | null = null;
 let transEl: HTMLDivElement | null = null; // 实时翻译行（可选，位于当前句下方）
+let prevTransEl: HTMLDivElement | null = null; // 上一句最终译文行（可选，位于上一句展示区下方）
 let lockBtn: HTMLButtonElement | null = null;
 let _locked = false;
 let _showPrev = true;
 let _prevOpacity = 0.35;
 let _pendingText = '';
+// 最近一次 SENTENCE_DONE 的句序号（offscreen 下发；0=尚未见到完成句）。
+// 当前句序号 = lastDoneSeq + 1，译文消息按序号路由到当前句行或上一句行。
+let lastDoneSeq = 0;
 // —— 近句回看（走神回看）——
 // 坑：回看缓冲刻意只放内存、不写任何 storage——转写内容可能涉及隐私，
 // 页面销毁即随 DOM 一并丢弃；跨会话留痕交给 popup 里已有的 tmspeech_transcript。
 const RECENT_MAX = 10;
-let recentSentences: string[] = []; // 新句在前（unshift），环形截断到 RECENT_MAX
+// 回看缓冲条目：原文 + 定稿译文（译文随原句配对，不再是独立条目，避免中英顺序错位）
+let recentSentences: { text: string; tr?: string }[] = []; // 新句在前（unshift），环形截断到 RECENT_MAX
 let reviewBtn: HTMLButtonElement | null = null;
 let reviewPanel: HTMLDivElement | null = null;
 let reviewOpen = false;
@@ -164,6 +169,14 @@ function create() {
   ].join('');
   overlay.appendChild(transEl);
 
+  // 上一句最终译文行：跟随上一句展示区（prevEl）的透明度基调，字号同当前句译文
+  prevTransEl = document.createElement('div');
+  prevTransEl.style.cssText = [
+    'color:#8ec9ff;font-weight:500;line-height:1.4;margin-top:1px;',
+    'word-break:break-word;display:none;',
+  ].join('');
+  overlay.appendChild(prevTransEl);
+
   addLockButton();
   // 开关默认开，先按内存偏好挂载；prefs 异步到达后 applyFeatureToggles 会校正
   // （关闭则整体拆除 DOM，不留监听开销）。
@@ -226,13 +239,23 @@ function renderReviewPanel() {
   recentSentences.forEach((sentence, i) => {
     const item = document.createElement('div');
     // 全部用 textContent 写入，句子文本来自识别结果，绝不走 innerHTML（防 XSS 注入点）
-    item.textContent = sentence;
+    item.textContent = sentence.text;
     item.style.cssText = [
       'color:#fff;font-size:13px;font-weight:500;line-height:1.5;',
       'word-break:break-word;padding:6px 2px;',
       i > 0 ? 'border-top:1px solid rgba(255,255,255,0.08);' : '',
     ].join('');
     reviewPanel!.appendChild(item);
+    // 定稿译文随原句配对显示（蓝色小字，与叠层翻译行同色）
+    if (sentence.tr) {
+      const tr = document.createElement('div');
+      tr.textContent = sentence.tr;
+      tr.style.cssText = [
+        'color:#8ec9ff;font-size:12px;font-weight:500;line-height:1.4;',
+        'word-break:break-word;padding:0 2px 6px;',
+      ].join('');
+      reviewPanel!.appendChild(tr);
+    }
   });
 }
 
@@ -547,7 +570,7 @@ function destroy() {
   if (!overlay) return;
   const el = overlay;
   overlay = null; prevEl = null; textEl = null; lockBtn = null;
-  transEl = null;
+  transEl = null; prevTransEl = null;
   // 回看 UI 随叠层销毁；reviewOpen 复位，避免下次 create 误判展开态。
   reviewBtn = null; reviewPanel = null; reviewOpen = false;
   if (reviewCloseTimer) { clearTimeout(reviewCloseTimer); reviewCloseTimer = null; }
@@ -603,6 +626,12 @@ function setText(text: string) {
   textEl.textContent = text;
 }
 
+// 上一句译文行的显隐：跟随"显示上一句"开关，且仅当有译文内容
+function syncPrevTrans() {
+  if (!prevTransEl) return;
+  prevTransEl.style.display = (_showPrev && !!prevTransEl.textContent) ? '' : 'none';
+}
+
 function setOverlayText(prev: string, current: string) {
   const pe = prevEl, te = textEl;
   if (!pe || !te) return;
@@ -610,6 +639,7 @@ function setOverlayText(prev: string, current: string) {
   pe.textContent = prev;
   pe.style.display = showPrev ? '' : 'none';
   te.textContent = current;
+  syncPrevTrans();
 }
 
 // 监听扩展断开，自动隐藏字幕
@@ -634,27 +664,57 @@ chrome.runtime.onMessage.addListener((msg) => {
       // 未被 content 消费，offscreen 经 FW_CT 照发不误，直接在此接住即可（不动协议）。
       // 回看关闭时不入缓冲（零开销约束：无 DOM 也无数据维护）。
       if (msg.text && _lookbackEnabled) {
-        recentSentences.unshift(String(msg.text));
+        recentSentences.unshift({ text: String(msg.text) });
         if (recentSentences.length > RECENT_MAX) recentSentences.length = RECENT_MAX;
       }
+      // 句序号推进：刚完成句的序号由 offscreen 随消息带（seq>0 用真值，缺省按本地计数兜底）。
+      // 推进必须放在路由/移交之前，使随后的 TRANSLATION 能正确判"当前句"。
+      {
+        const seq = Number(msg.seq) || 0;
+        lastDoneSeq = seq > 0 ? seq : lastDoneSeq + 1;
+      }
+      // 换句：手头的当前句译文立即移交"上一句"槽（不用等定稿翻译排完队），当前行清空。
+      if (transEl && transEl.textContent) {
+        if (prevTransEl) {
+          prevTransEl.textContent = transEl.textContent;
+          prevTransEl.style.opacity = String(_prevOpacity);
+          syncPrevTrans();
+        }
+        transEl.textContent = '';
+      }
+      if (transEl) transEl.style.display = 'none';
       break;
     case 'TRANSLATION':
-      // 流式翻译：即时刷新翻译行（定稿句的译文由 TRANSLATION_FINAL 负责）
-      if (transEl && msg.text) {
-        transEl.textContent = msg.text;
-        transEl.style.display = '';
+      // 流式译文按句序号路由：当前句（seq === lastDoneSeq+1）进 transEl；
+      // 上一句的迟到流式结果（seq === lastDoneSeq）补进 prevTransEl，不再污染当前行。
+      if (msg.text) {
+        const s = Number(msg.seq) || 0;
+        if (s === lastDoneSeq + 1 && transEl) {
+          transEl.textContent = msg.text;
+          transEl.style.display = '';
+        } else if (s === lastDoneSeq && s > 0 && prevTransEl) {
+          prevTransEl.textContent = msg.text;
+          prevTransEl.style.opacity = String(_prevOpacity);
+          syncPrevTrans();
+        }
       }
       break;
     case 'TRANSLATION_FINAL':
-      // 定稿译文：刷新翻译行并记入回看缓冲，随原句一起回看
+      // 定稿译文总属于"上一句"（seq === lastDoneSeq）：写入 prevTransEl，
+      // 同时配对进回看缓冲（挂到最近一条尚无译文的原句上），并兜底清空当前行。
       if (msg.text) {
-        if (transEl) {
-          transEl.textContent = msg.text;
-          transEl.style.display = '';
-        }
-        if (_lookbackEnabled) {
-          recentSentences.unshift(String(msg.text));
-          if (recentSentences.length > RECENT_MAX) recentSentences.length = RECENT_MAX;
+        const s = Number(msg.seq) || 0;
+        if (s === lastDoneSeq && s > 0) {
+          if (prevTransEl) {
+            prevTransEl.textContent = msg.text;
+            prevTransEl.style.opacity = String(_prevOpacity);
+            syncPrevTrans();
+          }
+          if (transEl) { transEl.textContent = ''; transEl.style.display = 'none'; }
+          if (_lookbackEnabled) {
+            const target = recentSentences.find(x => !x.tr);
+            if (target) target.tr = String(msg.text);
+          }
         }
       }
       break;
@@ -688,11 +748,13 @@ chrome.runtime.onMessage.addListener((msg) => {
       if (prevEl) { prevEl.style.fontSize = msg.fontSize + 'px'; }
       if (textEl) { textEl.style.fontSize = msg.fontSize + 'px'; scheduleSave(); }
       if (transEl) { transEl.style.fontSize = Math.round(msg.fontSize * 0.6) + 'px'; }
+      if (prevTransEl) { prevTransEl.style.fontSize = Math.round(msg.fontSize * 0.6) + 'px'; }
       break;
     case 'SET_PREV_OPTS':
       _showPrev = msg.showPrev;
       _prevOpacity = (msg.prevOpacity ?? 35) / 100;
       if (prevEl) prevEl.style.opacity = String(_prevOpacity);
+      if (prevTransEl) { prevTransEl.style.opacity = String(_prevOpacity); syncPrevTrans(); }
       break;
     case 'RESET_OVERLAY_POSITION':
       chrome.storage.local.remove(STORAGE_KEY);

@@ -28,34 +28,94 @@ let translateEnabled = false;
 let translateDirection: 'auto' | 'zh-en' | 'en-zh' = 'auto';
 let translateWarned = false;
 let transInFlight = false;
-let transPending: string | null = null;
+let transPending: { text: string; seq: number } | null = null;
 let transLastSent = '';
+// 当前识别句的序号（从 1 起）。随 SENTENCE_DONE 递增，随每次 TRANSLATE 消息带给 worker，
+// worker 结果原样回传 → content 据此把译文路由到"当前句行"还是"上一句行"。
+let sentenceSeq = 1;
+
+function createTranslateWorker() {
+  translateWorker = new Worker(chrome.runtime.getURL('translation-worker.js'));
+  translateWorker.onmessage = (e) => {
+    const m = (e.data || {}) as any;
+    if (m.type !== 'TRANSLATION') return;
+    if (m.test) {
+      // 测试请求的应答：直接回给测试发起方，不触碰流式/定稿状态机
+      finishTranslateTest({ ok: !!m.ok && !!m.text, text: m.text || '', error: m.reason === 'no-model' ? 'no-model' : (m.error || ''), debug: m.debug });
+      return;
+    }
+    if (m.ok && m.text) {
+      if (m.kind === 'final') {
+        sendSafe('FW_CT', { type: 'TRANSLATION_FINAL', text: m.text, seq: m.seq });
+        // 同一定稿译文也送历史：background 挂到末条转写原句上，供 popup 历史列表按开关显示
+        sendSafe('FW_POP', { type: 'TRANSLATION_FINAL', text: m.text });
+      } else sendSafe('FW_CT', { type: 'TRANSLATION', text: m.text, seq: m.seq });
+    } else if (m.reason === 'no-model' && !translateWarned) {
+      translateWarned = true;
+      log('翻译不可用：未检测到翻译模型。请在扩展面板"实时翻译"中点击"选择模型"安装官方模型包（github.com/huchangzhi/easysub/releases）');
+    } else if (m.error && !translateWarned) {
+      translateWarned = true;
+      log('翻译出错: ' + m.error);
+    }
+    if (m.kind !== 'final') {
+      transInFlight = false;
+      pumpTranslate();
+    }
+  };
+}
 
 function ensureTranslateWorker() {
   if (translateWorker || !translateEnabled) return;
   try {
-    translateWorker = new Worker(chrome.runtime.getURL('translation-worker.js'));
-    translateWorker.onmessage = (e) => {
-      const m = (e.data || {}) as any;
-      if (m.type !== 'TRANSLATION') return;
-      if (m.ok && m.text) {
-        if (m.kind === 'final') sendSafe('FW_CT', { type: 'TRANSLATION_FINAL', text: m.text });
-        else sendSafe('FW_CT', { type: 'TRANSLATION', text: m.text });
-      } else if (m.reason === 'no-model' && !translateWarned) {
-        translateWarned = true;
-        log('翻译不可用：未检测到翻译模型。请在扩展面板"实时翻译"中点击"选择模型"安装官方模型包（github.com/huchangzhi/easysub/releases）');
-      } else if (m.error && !translateWarned) {
-        translateWarned = true;
-        log('翻译出错: ' + m.error);
-      }
-      if (m.kind !== 'final') {
-        transInFlight = false;
-        pumpTranslate();
-      }
-    };
+    createTranslateWorker();
   } catch (e) {
     log('翻译 worker 创建失败: ' + e);
   }
+}
+
+// —— 翻译模型自测：面板"测试翻译"经 background → offscreen → worker 的一次性请求 ——
+let translateTestResolver: ((r: { ok: boolean; text?: string; error?: string; debug?: any }) => void) | null = null;
+let translateTestTimer: any = null;
+let testOwnedWorker = false; // 测试时临时创建的 worker（无会话翻译共用）→ 取消时可直接 terminate
+
+function finishTranslateTest(r: { ok: boolean; text?: string; error?: string; debug?: any }) {
+  if (translateTestTimer) { clearTimeout(translateTestTimer); translateTestTimer = null; }
+  if (translateTestResolver) {
+    const cb = translateTestResolver;
+    translateTestResolver = null;
+    cb(r);
+  }
+}
+
+function cancelTranslateTest() {
+  if (testOwnedWorker && translateWorker) {
+    translateWorker.terminate();
+    translateWorker = null;
+    transInFlight = false;
+    transPending = null;
+    transLastSent = '';
+    sentenceSeq = 1;
+  }
+  finishTranslateTest({ ok: false, error: 'cancelled' });
+}
+
+function testTranslate(text: string, direction: string): Promise<{ ok: boolean; text?: string; error?: string; debug?: any }> {
+  return new Promise((resolve) => {
+    // 测试不依赖"启用翻译"开关：翻译未启用也创建 worker 实测（模型加载失败会因记忆化只跑一次）
+    if (!translateWorker) {
+      try {
+        createTranslateWorker();
+        testOwnedWorker = true;
+      } catch (e) {
+        resolve({ ok: false, error: 'worker-create-fail' });
+        return;
+      }
+    }
+    translateTestResolver = resolve;
+    // 测试用 24 个 token 上限：短句足够验证模型可用，避免单线程生成跑满 128 token 久久不返回
+    translateWorker!.postMessage({ type: 'TRANSLATE', text, direction, kind: 'final', wasmPaths: chrome.runtime.getURL('ort-wasm/'), test: true, maxNewTokens: 24 });
+    translateTestTimer = setTimeout(() => finishTranslateTest({ ok: false, error: 'timeout' }), 120000);
+  });
 }
 
 function destroyTranslateWorker() {
@@ -65,30 +125,33 @@ function destroyTranslateWorker() {
   transInFlight = false;
   transPending = null;
   transLastSent = '';
+  sentenceSeq = 1;
 }
 
 function pumpTranslate() {
   if (!translateWorker || !translateEnabled || transInFlight || !transPending) return;
-  const t = transPending;
+  const { text, seq } = transPending;
   transPending = null;
   transInFlight = true;
-  transLastSent = t;
-  translateWorker.postMessage({ type: 'TRANSLATE', text: t, direction: translateDirection, kind: 'stream', wasmPaths: chrome.runtime.getURL('ort-wasm/') });
+  transLastSent = text;
+  translateWorker.postMessage({ type: 'TRANSLATE', text, seq, direction: translateDirection, kind: 'stream', wasmPaths: chrome.runtime.getURL('ort-wasm/') });
 }
 
-// 流式：识别文本变化即入队翻译（同一文本不重复翻）
+// 流式：识别文本变化即入队翻译（同一文本不重复翻）。
+// translateWarned 置位后（模型缺失或加载失败已确诊）不再发送，避免每句/每次变化徒劳触发 worker。
 function translateStream(text: string) {
-  if (!translateEnabled || !translateWorker || !text) return;
+  if (!translateEnabled || !translateWorker || translateWarned || !text) return;
   if (text === transLastSent) return;
-  transPending = text;
+  transPending = { text, seq: sentenceSeq };
   pumpTranslate();
 }
 
 // 定稿：句子结束翻一次并记录（丢弃尚未翻译的流式文本，避免串句）
+// seq 取"刚完成句"的序号：调用点（onSentenceDone）在递增 sentenceSeq 之前执行
 function translateFinal(text: string) {
-  if (!translateEnabled || !translateWorker || !text) return;
+  if (!translateEnabled || !translateWorker || translateWarned || !text) return;
   transPending = null;
-  translateWorker.postMessage({ type: 'TRANSLATE', text, direction: translateDirection, kind: 'final', wasmPaths: chrome.runtime.getURL('ort-wasm/') });
+  translateWorker.postMessage({ type: 'TRANSLATE', text, seq: sentenceSeq, direction: translateDirection, kind: 'final', wasmPaths: chrome.runtime.getURL('ort-wasm/') });
 }
 
 // ---- 识别延迟测量（LATENCY_UPDATE 测量端）----
@@ -320,6 +383,7 @@ function setupPort() {
       translateDirection = msg.translationDirection === 'zh-en' || msg.translationDirection === 'en-zh'
         ? msg.translationDirection : 'auto';
       if (translateEnabled) ensureTranslateWorker();
+      sentenceSeq = 1;
 
       // 坑：跨会话残留的文本状态会让新会话开头闪出上一场的字幕；这里全部清零，
       // 并递增标点代次使所有在途的标点延迟回调失效（回调内部会校验代次）。
@@ -373,10 +437,13 @@ function setupPort() {
           prevSentence = usePunct ? addPunctuation(text) : text;
           lastText = '';
           lastPunctText = '';
+          // 句序号：本句的序号（尚未递增），随后递增给下一句；content 据此路由译文归属
+          const seq = sentenceSeq;
           sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: '' });
-          sendSafe('FW_CT', { type: 'SENTENCE_DONE', text: prevSentence, isFinal: true });
+          sendSafe('FW_CT', { type: 'SENTENCE_DONE', text: prevSentence, isFinal: true, seq });
           sendSafe('FW_POP', { type: 'SENTENCE_DONE', text: prevSentence });
           translateFinal(prevSentence);
+          sentenceSeq = seq + 1;
         },
         onStatusChanged: (status) => {
           sendSafe('FW_POP', { type: 'STATUS_CHANGED', status: JobStatus[status] });
@@ -440,6 +507,12 @@ function setupPort() {
 
     if (msg.type === 'SET_ENDPOINT') {
       log(`端点阈值 saved: ${msg.rule1}/${msg.rule2}/${msg.rule3} (重启生效)`);
+    }
+
+    if (msg.type === 'TRANSLATE_TEST') {
+      testTranslate(String(msg.text ?? ''), msg.direction || 'auto').then(r => {
+        sendSafe('TRANSLATE_TEST_RESULT', { id: msg.id, ...r });
+      });
     }
 
     if (msg.type === 'STREAM_READY') {

@@ -187,6 +187,12 @@ body {
   background: #555; transition: background 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
 }
 .hero .status-dot { width: 12px; height: 12px; }
+/* 实验性徽标：翻译开关旁的小灰注，弱化视觉不抢开关主位 */
+.experimental-badge {
+  font-size: 10px; font-weight: 500; color: var(--text2);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 6px; line-height: 1.4; user-select: none;
+}
 /* 去 AI 味默认静态：绿点实心+状态词变绿已足够表意；呼吸动效由下方 body.anim 门控交还用户 */
 .status-dot.Running { background: var(--green); }
 .status-dot.Stopped { background: var(--red); }
@@ -460,6 +466,11 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
 .transcript-entry .entry-ts {
   font-family: ui-monospace, Consolas, 'Courier New', monospace;
   font-size: 10px; color: var(--text2); margin-right: 2px;
+}
+/* 译文行：原文下方独立小字（蓝灰），与叠层翻译行同色系；开关关闭时不渲染 DOM */
+.transcript-entry .entry-tr {
+  margin-top: 2px; font-size: 11px; color: var(--accent, #8ec9ff);
+  opacity: 0.9; line-height: 1.4; word-break: break-word;
 }
 /* 空态：图标+主句+提示语垂直居中；search 无命中复用同一容器样式（无 small） */
 .transcript-empty {
@@ -752,6 +763,7 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
     <div class="row">
       <input type="checkbox" id="chkTranslate">
       <label for="chkTranslate" id="showTranslate">启用翻译</label>
+      <span class="experimental-badge" id="experimentalLabel">实验性</span>
       <span class="help-wrap">
         <button type="button" id="helpBtnTranslate" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipTranslate">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
@@ -769,7 +781,12 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
       <button type="button" class="seg" data-dir="en-zh" role="radio" aria-checked="false"><span class="seg-name" data-key="translateEnZh">英→中</span></button>
     </div>
     <div class="translate-notice" id="translateNotice" style="display:none;"></div>
-    <span class="model-info" id="translateStatus"></span>
+    <div class="row" style="margin-top:6px;">
+      <span class="model-info" id="translateStatus"></span>
+      <button type="button" id="btnTestTranslate" class="icon-btn" style="margin-left:auto;">
+        <span id="testTranslateLabel">测试翻译</span>
+      </button>
+    </div>
     <input type="file" id="modelFolderPicker" webkitdirectory multiple style="display:none;">
   </div>
 
@@ -785,6 +802,10 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
         </button>
         <span class="help-tip" role="tooltip" id="helpTipTimestamps">在每句前显示 [分:秒] 时标，表示相对本次会话第一句的偏移；旧版本记录的句子没有时标信息，只显示纯文本。</span>
       </span>
+    </div>
+    <div class="row">
+      <input type="checkbox" id="chkTranscriptTr" checked>
+      <label for="chkTranscriptTr" id="showTrInHistory">历史字幕显示翻译</label>
     </div>
     <div class="search-wrap">
       <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
