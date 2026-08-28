@@ -146,6 +146,16 @@ async function applyLang() {
   $('pickModelLabel').textContent = tr('pickModel');
   $('testTranslateLabel').textContent = tr('testTranslate');
   $('helpTipTranslate').textContent = tr('helpTranslate');
+  // —— 热词（窗中窗）+ 导出文案 ——
+  $('hotwordsOpenLabel').textContent = tr('hotwordsOpen');
+  $('hotwordsTitle').textContent = tr('hotwordsTitle');
+  $('hotwordsHint').textContent = tr('hotwordsHint');
+  $('hotwordsNextRun').textContent = tr('hotwordsNextRun');
+  $('hotwordsSaveLabel').textContent = tr('hotwordsSave');
+  $('btnHotwordsClose').setAttribute('aria-label', tr('close'));
+  $('exportLabel').textContent = tr('exportLabel');
+  $('helpTipExport').textContent = tr('exportHelp');
+  refreshHotwordsStatus();
   buildTranslateNotice();
   refreshTranslateStatus();
   updateBgSchemeNames(); // 背景方案名按当前模式+语言刷新（t31，见函数内坑注）
@@ -227,6 +237,8 @@ const DEFAULT_THEME = 'cyan';
 const THEMES = ['cyan', 'emerald', 'violet', 'amber', 'rose'];
 // 波形当前柱颜色缓存：rAF 每帧读 getComputedStyle 太贵，主题切换时才刷新一次
 let accentCache = '#5e9eff';
+// 波形静柱色缓存：随深浅模式二态（暗底白柱 / 浅底黑柱），模式切换时刷新
+let waveDimCache = 'rgba(255, 255, 255, 0.22)';
 
 function applyTheme(theme: string) {
   document.body.dataset.theme = theme;
@@ -295,6 +307,8 @@ function applyColorMode(mode: string) {
     b.classList.toggle('active', on);
     b.setAttribute('aria-checked', String(on));
   });
+  // 波形静柱色随深浅模式二态刷新（canvas 无 CSS 继承，只能 JS 给色）
+  waveDimCache = mode === 'light' ? 'rgba(0, 0, 0, 0.20)' : 'rgba(255, 255, 255, 0.22)';
   updateBgSchemeNames();
 }
 
@@ -371,7 +385,9 @@ function drawWave() {
     const v = levels[i] ?? 0;
     // 静止基线：无数据时也画 2px 小柱，避免空白块突兀
     const barH = Math.max(2, v * (cssH - 2));
-    ctx.fillStyle = i === LEVEL_BARS - 1 ? accentCache : 'rgba(255, 255, 255, 0.22)';
+    // 坑：当前柱取"最新推入的那根"（i === levels.length-1）而非固定最后一格——
+    // 打开面板/新会话初始几秒数据不满 60 根时，固定末端柱永远轮到空体位，亮色不出现
+    ctx.fillStyle = i === levels.length - 1 ? accentCache : waveDimCache;
     ctx.fillRect(i * (barW + gap), mid - barH / 2, barW, barH);
   }
 }
@@ -411,6 +427,141 @@ chkTranscriptTr.onchange = () => {
   // 同上：只影响 popup 渲染层，译文已在 background 落库，切换即时重渲染
   savePrefs({ transcriptTrEnabled: chkTranscriptTr.checked });
   renderTranscript();
+};
+
+// —— 术语/热词：窗中窗子面板（浮层盖在弹出窗内容上，避免二级 HTML 页面）——
+const HOTWORDS_KEY = 'tmspeech_hotwords';
+const hotwordsPanel = $('hotwordsPanel') as HTMLDivElement;
+const hotwordsInput = $('hotwordsInput') as HTMLTextAreaElement;
+const hotwordsCountEl = $('hotwordsCount');
+const hotwordsStatus = $('hotwordsStatus');
+const hotwordsSaveLabel = $('hotwordsSaveLabel');
+const btnOpenHotwords = $('btnOpenHotwords') as HTMLButtonElement;
+const btnHotwordsClose = $('btnHotwordsClose') as HTMLButtonElement;
+const btnHotwordsSave = $('btnHotwordsSave') as HTMLButtonElement;
+
+// 解析 textarea：每行一条 → trim → 去空 → 去重（保序）
+function parseHotwords(): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of hotwordsInput.value.split('\n')) {
+    const s = line.trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+function updateHotwordsCount() {
+  const n = parseHotwords().length;
+  hotwordsCountEl.textContent = tSync(currentLang, 'hotwordsCount').replace('{n}', String(n));
+}
+
+async function refreshHotwordsStatus() {
+  const r = await chrome.storage.local.get(HOTWORDS_KEY);
+  const arr = Array.isArray(r[HOTWORDS_KEY]) ? r[HOTWORDS_KEY] : [];
+  const n = arr.filter((s: unknown) => typeof s === 'string' && s.trim()).length;
+  hotwordsStatus.textContent = n
+    ? tSync(currentLang, 'hotwordsCount').replace('{n}', String(n))
+    : tSync(currentLang, 'hotwordsStatusNone');
+}
+
+function saveHotwords() {
+  chrome.storage.local.set({ [HOTWORDS_KEY]: parseHotwords() }).catch(() => {});
+  hotwordsSaveLabel.textContent = tSync(currentLang, 'hotwordsSaved');
+  setTimeout(() => { hotwordsSaveLabel.textContent = tSync(currentLang, 'hotwordsSave'); }, 1600);
+  refreshHotwordsStatus();
+}
+
+function openHotwords() {
+  chrome.storage.local.get(HOTWORDS_KEY).then(r => {
+    const arr = Array.isArray(r[HOTWORDS_KEY]) ? r[HOTWORDS_KEY].filter((s: unknown) => typeof s === 'string') : [];
+    hotwordsInput.value = arr.join('\n');
+    updateHotwordsCount();
+    hotwordsPanel.hidden = false;
+    hotwordsInput.focus();
+  }).catch(() => { hotwordsPanel.hidden = false; });
+}
+
+function closeHotwords() {
+  saveHotwords(); // 关闭即保存：编辑内容不丢
+  hotwordsPanel.hidden = true;
+}
+
+btnOpenHotwords.onclick = openHotwords;
+btnHotwordsSave.onclick = saveHotwords;
+btnHotwordsClose.onclick = closeHotwords;
+hotwordsInput.oninput = updateHotwordsCount;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !hotwordsPanel.hidden) closeHotwords();
+});
+
+// —— 字幕记录导出：TXT / SRT / JSON（含译文）——
+const btnExport = $('btnExport') as HTMLButtonElement;
+const exportFormat = $('exportFormat') as HTMLSelectElement;
+
+function fmtClock(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function fmtClockMmm(sec: number): string {
+  const r = Math.max(0, Math.floor(sec * 1000));
+  const ms = r % 1000;
+  return `${fmtClock(r - ms)},${String(ms).padStart(3, '0')}`;
+}
+
+function buildExport(): { name: string; content: string; mime: string } {
+  const fmt = exportFormat.value;
+  // 坑：译文是否导出跟随"历史字幕显示翻译"开关——用户没勾就只导出原文
+  const withTr = chkTranscriptTr.checked;
+  const entries = transcriptEntries.filter(e => e && e.text);
+  const baseTs = entries.find(e => e.ts > 0)?.ts || 0;
+  const stamp = () => {
+    const d = new Date();
+    return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}${String(d.getSeconds()).padStart(2, '0')}`;
+  };
+  if (fmt === 'json') {
+    return {
+      name: `easysub-${stamp()}.json`,
+      mime: 'application/json',
+      content: JSON.stringify(entries.map(e => ({ ts: e.ts || 0, text: e.text, ...(withTr && e.tr ? { tr: e.tr } : {}) })), null, 2),
+    };
+  }
+  if (fmt === 'srt') {
+    // 时标按首条有效 ts 为原点偏移；legacy ts=0 条目无真实时刻，顺延上一条结束 +0.5s
+    let prevEnd = 0;
+    let cue = 1;
+    const blocks: string[] = [];
+    for (const e of entries) {
+      const start = e.ts && baseTs ? (e.ts - baseTs) / 1000 : prevEnd + (prevEnd ? 0.5 : 0);
+      const end = start + 2;
+      prevEnd = end;
+      blocks.push(`${cue}\n${fmtClockMmm(start)} --> ${fmtClockMmm(end)}\n${e.text}${withTr && e.tr ? '\n' + e.tr : ''}\n`);
+      cue++;
+    }
+    return { name: `easysub-${stamp()}.srt`, mime: 'text/plain', content: blocks.join('\n') };
+  }
+  // txt
+  const lines = entries.map(e => {
+    const t = e.ts && baseTs ? `[${fmtClock(e.ts - baseTs)}] ` : '';
+    return t + e.text + (withTr && e.tr ? '\n' + e.tr : '');
+  });
+  return { name: `easysub-${stamp()}.txt`, mime: 'text/plain', content: lines.join('\n\n') };
+}
+
+btnExport.onclick = () => {
+  const { name, content, mime } = buildExport();
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
 // —— 会话计时：全面板仅此一个 interval ——
@@ -935,4 +1086,10 @@ chrome.runtime.sendMessage({ type: 'GET_STATUS' }).then((resp: any) => {
   // 坑：status 缺失（响应异常）时不得调 setStatus——undefined 会落进 else 分支误显 Stopped
   if (resp?.status) setStatus(resp.status, resp.startedAt);
   if (resp?.locked !== undefined) { locked = resp.locked; updateLockUI(); }
+  // 波形快照回填：setStatus 画的是空基线，这里用 bg 兜底的最近 ~7s 电平重画，
+  // 面板每次打开都能看到上一段波形，而不是从空白重新填充
+  if (Array.isArray(resp?.levels) && resp.levels.length) {
+    levels = resp.levels.slice(-LEVEL_BARS);
+    if (chkWaveform.checked && lastStatus === 'Running') drawWave();
+  }
 }).catch(() => {});

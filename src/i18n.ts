@@ -135,6 +135,19 @@ const strings: Record<string, Record<string, string>> = {
     translateTestNoModel: '翻译模型不可用：未检测到模型，请先选择模型目录',
     translateTestCancel: '停止测试',
     translateTestCancelled: '测试已取消',
+    // —— 术语/热词（窗中窗编辑，下次启动会话生效）——
+    hotwordsOpen: '热词词典',
+    hotwordsTitle: '热词词典',
+    hotwordsStatusNone: '未设置热词',
+    hotwordsHint: '每行一个。把经常识别不准的专业术语、人名、缩写、专有名词加进来（中英文均可），识别解码时会倾向这些词。',
+    hotwordsNextRun: '热词从下一次启动识别会话开始生效；保存后需重新开始一次识别。',
+    hotwordsSave: '保存',
+    hotwordsSaved: '已保存',
+    hotwordsCount: '{n} 条',
+    close: '关闭',
+    // —— 字幕记录导出 ——
+    exportLabel: '导出',
+    exportHelp: '导出当前保存的字幕记录（含译文，若有）：TXT 纯文本 / SRT 字幕（可导入播放器）/ JSON 原数据。',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -252,6 +265,19 @@ const strings: Record<string, Record<string, string>> = {
     translateTestNoModel: 'Translation unavailable: no model detected. Please select the model folder first',
     translateTestCancel: 'Stop Test',
     translateTestCancelled: 'Test cancelled',
+    // —— Hotwords (window-in-window editor, applies next session) ——
+    hotwordsOpen: 'Hotword Dictionary',
+    hotwordsTitle: 'Hotword Dictionary',
+    hotwordsStatusNone: 'No hotwords set',
+    hotwordsHint: 'One per line. Add frequently-misheard jargon, names, abbreviations or proper nouns (Chinese or English) to bias recognition toward them.',
+    hotwordsNextRun: 'Hotwords apply from the next recognition session; restart recognition after saving.',
+    hotwordsSave: 'Save',
+    hotwordsSaved: 'Saved',
+    hotwordsCount: '{n} item(s)',
+    close: 'Close',
+    // —— Transcript export ——
+    exportLabel: 'Export',
+    exportHelp: 'Export the saved transcript (includes translations when present): TXT plain text / SRT subtitles (importable into players) / JSON raw data.',
   },
 };
 

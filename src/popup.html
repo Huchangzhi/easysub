@@ -571,6 +571,34 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
   outline: 1.5px solid var(--accent); outline-offset: -1px;
 }
 
+/* —— 热词编辑·窗中窗：子面板浮层盖在弹出窗内容上，独立小卡片"像另一个小窗" —— */
+.container { position: relative; }
+.subpanel {
+  position: fixed; inset: 0; z-index: 30;
+  display: flex; flex-direction: column; gap: 8px;
+  overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+}
+body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); }
+.subpanel[hidden] { display: none; }
+.subpanel-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.subpanel-hint { font-size: 11px; color: var(--text2); line-height: 1.5; }
+.subpanel textarea {
+  flex: 1 1 auto; min-height: 96px; resize: none;
+  background: var(--surface-input); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px; font: 400 12px/1.6 ui-monospace, Consolas, monospace;
+}
+.subpanel textarea:focus { outline: 1.5px solid var(--accent); outline-offset: -1px; }
+.subpanel-foot { margin-top: 2px; }
+.export-select {
+  background: var(--surface-input); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px 6px; font: 500 11px/1.4 inherit; margin-left: auto;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   /* 坑：层级最高——t28 动效开关（body.anim）只是用户偏好，系统"减弱动态"永远优先：
@@ -695,6 +723,13 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
       <button id="btnResetEndpoint" class="icon-btn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.5 15.5a9 9 0 1 0 2.12-9.36L1 10"/></svg>
         <span id="resetEndpointLabel">默认</span>
+      </button>
+    </div>
+    <div class="row">
+      <span class="model-info" id="hotwordsStatus"></span>
+      <button type="button" id="btnOpenHotwords" class="icon-btn" style="margin-left:auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        <span id="hotwordsOpenLabel">热词词典</span>
       </button>
     </div>
     <span class="model-info" id="modelInfo">Zipformer · 中英双语 · 离线</span>
@@ -827,6 +862,21 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
         <span id="clearLabel">清空</span>
       </button>
+      <button id="btnExport" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span id="exportLabel">导出</span>
+      </button>
+      <select id="exportFormat" class="export-select" aria-label="export">
+        <option value="txt">TXT</option>
+        <option value="srt">SRT</option>
+        <option value="json">JSON</option>
+      </select>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnExport" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipExport">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipExport"></span>
+      </span>
     </div>
   </div>
 
@@ -926,6 +976,26 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
   </div>
 
   <div class="status-bar" id="modelStatus"></div>
+
+  <!-- 热词编辑·窗中窗（子面板浮层）：absolute 盖在弹出窗上，随 .container 定位 -->
+  <div class="subpanel" id="hotwordsPanel" hidden>
+    <div class="subpanel-head">
+      <span class="section-label" id="hotwordsTitle">热词词典</span>
+      <button type="button" id="btnHotwordsClose" class="icon-btn" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <p class="subpanel-hint" id="hotwordsHint"></p>
+    <div class="row subpanel-foot">
+      <span class="model-info" id="hotwordsCount"></span>
+      <button type="button" id="btnHotwordsSave" class="icon-btn" style="margin-left:auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        <span id="hotwordsSaveLabel">保存</span>
+      </button>
+    </div>
+    <textarea id="hotwordsInput" rows="8" spellcheck="false"></textarea>
+    <p class="subpanel-hint" id="hotwordsNextRun"></p>
+  </div>
 
   <div class="disclaimer" id="disclaimer">字幕由模型识别，不保证准确</div>
 </div>

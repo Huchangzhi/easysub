@@ -224,6 +224,41 @@ function log(msg: string) {
   try { port.postMessage({ type: 'FW_POP', payload: { type: 'LOG', message: msg } }); } catch {}
 }
 
+// 坑：该 wasm 构建没编 getExceptionMessage，C++ throw 会变成 emscripten 抛出的裸指针
+// （__cxa_exception 对象地址，就是个数字）。按 libc++/emscripten 布局手动解码：
+//   excPtr 指向异常对象的开头；-20 处是 typeinfo*；对象体是 { vptr, std::string }，
+//   with 字段是 libc++ long-mode std::string（首 4 字节即字符串堆指针）。
+async function describeWasmException(e: any): Promise<string> {
+  if (typeof e !== 'number') return String(e);
+  try {
+    const M = (window as any).Module;
+    const read32 = (p: number) => M.HEAPU32[p >> 2];
+    const typeinfo = read32(e - 20);
+    const type = typeinfo ? M.UTF8ToString(read32(typeinfo + 4)) : '(no typeinfo)';
+    let msg = '';
+    for (const off of [4, 8, 12, 16]) {
+      const w = read32(e + off);
+      if (w > 0 && w < M.HEAPU8.length) {
+        const s = M.UTF8ToString(w);
+        if (s) { msg = s; break; }
+      }
+    }
+    if (!msg) {
+      const b: number[] = [];
+      let i = 0;
+      while (i < 128) {
+        const c = M.HEAPU8[e + 4 + i];
+        if (!c) break;
+        b.push(c); i++;
+      }
+      msg = String.fromCharCode(...b);
+    }
+    return `WASM C++ 异常: ${type} | ${msg || '(无消息)'}`;
+  } catch (err) {
+    return `WASM 异常指针 ${e}（解码失败: ${err}）`;
+  }
+}
+
 function sendSafe(type: string, payload: any) {
   try { port.postMessage({ type, payload }); } catch {}
 }
@@ -462,11 +497,47 @@ function setupPort() {
           const r1 = msg.endpointRule1 ?? 0.8;
           const r2 = msg.endpointRule2 ?? 0.6;
           const r3 = msg.endpointRule3 ?? 15;
-          (window as any).__recognizer = createOnlineRecognizer((window as any).Module, {
+          const recCfg: any = {
             rule1MinTrailingSilence: r1,
             rule2MinTrailingSilence: r2,
             rule3MinUtteranceLength: Math.round(r3),
-          });
+          };
+          // 热词：仅当非空才切 modified_beam_search 并烘焙 hotwordsBuf（wasm 一次性
+          // 嵌入配置，无 per-stream 热更新；空列表完全不改默认 greedy 行为）。
+          // ponytail: 中文术语偏置最好，英文是字符级偏置、效果略弱
+          if (Array.isArray(msg.hotwords) && msg.hotwords.length) {
+            // 坑：: # @ 是 sherpa 热词保留语法前缀，@ 会 std::stof 抛异常导致
+            // recognizer 创建崩溃（C++ std::invalid_argument 以裸指针形式透出），
+            // 这里直接丢弃这类 token。
+            const buf = (msg.hotwords as string[])
+              .filter((w) => !!w.trim() && !/^[:#@]/.test(w.trim()))
+              .map((w) => w.trim())
+              .join(' ');
+            if (buf) {
+              recCfg.decodingMethod = 'modified_beam_search';
+              recCfg.hotwordsBuf = buf;
+              recCfg.hotwordsBufSize = new TextEncoder().encode(buf).length;
+              recCfg.hotwordsScore = 1.5;
+            }
+          }
+          // 坑：模型是逐字词表（cjkchar），英文整词查不到 ID 时 wasm 会为每个失败词刷屏
+          // 打日志（"Cannot find ID for token"）——大表里几个英文词就能灌爆 console 卡死
+          // 面板。建 recognizer 期间临时静默这两类纯 init 噪音，不影响真实错误输出。
+          const origErr = console.error;
+          const origLog = console.log;
+          const swallow = (...a: unknown[]) => {
+            const s = String(a[0] ?? '');
+            if (s.includes('Cannot find ID for token') || s.includes('Failed to encode some hotwords')) return;
+            origErr(...a);
+          };
+          console.error = swallow as typeof console.error;
+          console.log = swallow as typeof console.log;
+          try {
+            (window as any).__recognizer = createOnlineRecognizer((window as any).Module, recCfg);
+          } finally {
+            console.error = origErr;
+            console.log = origLog;
+          }
         }
         if (usePunct && !(window as any).__punctuator) {
           try {
@@ -485,9 +556,9 @@ function setupPort() {
         // 向 background 要一个全新的 streamId 并立即开流。旧实现"启动时预签发、
         // 模型加载完才消费"，时间窗一长就报 "Error starting tab capture"。
         sendSafe('FW_POP', { type: 'REQUEST_STREAM', tabId: msg.tabId });
-        } catch (e: any) { log('INIT_OFFSCREEN async 异常: ' + (e?.stack || e)); throw e; }
-      })().catch((e) => {
-        log('Pipeline start 异常: ' + (e.message || e));
+        } catch (e: any) { log('INIT_OFFSCREEN async 异常: ' + await describeWasmException(e)); throw e; }
+      })().catch(async (e) => {
+        log('Pipeline start 异常: ' + await describeWasmException(e));
         sendSafe('FW_POP', { type: 'ERROR', message: `Pipeline启动失败: ${e.message || e}` });
       });
     }

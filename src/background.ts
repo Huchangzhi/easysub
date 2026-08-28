@@ -25,6 +25,10 @@ let reconnectTimer: any = null;
 // 代次，不匹配立即中止（不再置状态/不发消息/不创建文档）。SW 重启后计数归零无妨：
 // 代次只在同一次 SW 生命周期内的 START 与清理之间做比对。
 let sessionEpoch = 0;
+// 电平快照（最近 60 条，~7s）：波形只在 popup 打开时渲染，LEVEL 消息收不到时
+// 快照兜底，让"每次打开面板"都能恢复上一段波形而不是从空基线重新填充。
+const LEVEL_SNAPSHOT_MAX = 60;
+let bgLevels: number[] = [];
 
 function sendToPopup(msg: any) {
   chrome.runtime.sendMessage(msg).catch(() => {});
@@ -147,6 +151,12 @@ chrome.runtime.onConnect.addListener((port) => {
       // 定稿译文：offscreen 每句完成时经 FW_POP 送来，挂到历史末条原句；同时照常转发 popup
       if (p.type === 'TRANSLATION_FINAL') {
         attachTranscriptTranslation(p.text);
+      }
+      // 电平快照：popup 关闭时 LEVEL 消息无人消费，这里留着，重开面板时还原最近波形，
+      // 避免"每次打开都从空基线重新填充"。钳值防脏；只保留最近 ~7s（60 条 × 120ms）。
+      if (p.type === 'LEVEL') {
+        bgLevels.push(Math.max(0, Math.min(1, Number(p.v) || 0)));
+        if (bgLevels.length > LEVEL_SNAPSHOT_MAX) bgLevels.shift();
       }
       if (p.type === 'STATUS_CHANGED') {
         pipelineStatus = p.status;
@@ -292,6 +302,7 @@ function cleanupAll() {
   // offscreen 文档并恢复采集（幽灵会话）。自增代次后，START 各恢复点的比对全部失配。
   sessionEpoch++;
   sessionStartedAt = 0; // 会话终结即清开始戳（epoch 失配/STOP/错误清理统一走这里）
+  bgLevels = []; // 波形快照随之清空：停止后的面板不再显示已结束会话的电平残留
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   const tabId = captureTabId;
   pipelineStatus = 'Stopped';
@@ -449,6 +460,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       initMsg.translationEnabled = prefs.translationEnabled === true;
       const tdir = prefs.translationDirection;
       initMsg.translationDirection = tdir === 'zh-en' || tdir === 'en-zh' ? tdir : 'auto';
+      // 热词随 INIT 下发：offscreen 建 recognizer 时一次性烘焙进配置
+      const hotwords = (await chrome.storage.local.get('tmspeech_hotwords'))['tmspeech_hotwords'];
+      if (Array.isArray(hotwords) && hotwords.length) initMsg.hotwords = hotwords;
       if (offscreenPort) {
         offscreenPort.postMessage(initMsg);
       } else {
@@ -503,10 +517,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // 坑：SW 冷启动后内存 sessionStartedAt 归零，但 storage.session 快照里还有——
       // 回源快照优先，内存值兜底（快照只在 Running 时存在，Stopped 时两者都无意义）
       const startedAt = (pipelineStatus === 'Running' && sess?.startedAt) || sessionStartedAt || 0;
-      sendResponse({ status: pipelineStatus, locked: lockR[LOCK_KEY] === true, startedAt });
+      sendResponse({ status: pipelineStatus, locked: lockR[LOCK_KEY] === true, startedAt, levels: bgLevels.slice() });
     }).catch(() => {
       // storage 异常时退化为内存缓存值，至少不阻塞 popup 初始化。
-      sendResponse({ status: pipelineStatus, locked: overlayLocked, startedAt: sessionStartedAt });
+      sendResponse({ status: pipelineStatus, locked: overlayLocked, startedAt: sessionStartedAt, levels: bgLevels.slice() });
     });
     return true;
   }
