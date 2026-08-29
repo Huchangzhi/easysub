@@ -8,30 +8,55 @@ on:
 
 jobs:
   opencode:
-    # 🛡️ 防盗门禁：必须输入暗号 (/oc 或 /opencode) 【并且】 必须是仓库的 Owner 或 Collaborator
     if: |
       (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode')) &&
-      (github.event.comment.author_association == 'OWNER' )
+      (github.event.comment.author_association == 'OWNER')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
       pull-requests: write
       issues: write
+
     steps:
       - name: Checkout repository
-        # 这里我把 v6 改成了目前最稳定的 v4，如果报错再换回 v6
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
           persist-credentials: false
 
+      # 🔐 动态生成 opencode.json，所有敏感信息来自 Secrets
+      - name: Create opencode.json
+        env:
+          MODEL_NAME: ${{ secrets.MY_PRIVATE_MODEL }}
+          BASE_URL: ${{ secrets.MY_PRIVATE_URL }}
+          API_KEY: ${{ secrets.MY_PRIVATE_KEY }}
+        run: |
+          # 使用 jq 或直接 cat 构建 JSON，注意转义
+          cat > opencode.json <<EOF
+          {
+            "\$schema": "https://opencode.ai/config.json",
+            "providers": {
+              "myprovider": {
+                "name": "My Custom API",
+                "package": "@opencode-ai/ai/providers/openai-compatible",
+                "options": {
+                  "baseURL": "${BASE_URL}",
+                  "apiKey": "${API_KEY}"
+                },
+                "models": {
+                  "${MODEL_NAME}": {
+                    "name": "${MODEL_NAME}",
+                    "modelID": "${MODEL_NAME}"
+                  }
+                }
+              }
+            }
+          }
+          EOF
+
       - name: Run OpenCode
         uses: anomalyco/opencode/github@latest
-        env:
-          # 🔐 从你的私密保险箱里读取中转站地址和 Key
-          OPENAI_API_KEY: ${{ secrets.MY_PRIVATE_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.MY_PRIVATE_URL }}
         with:
-          # 🔐 从保险箱里读取模型名称，深藏功与名
-          model: ${{ secrets.MY_PRIVATE_MODEL }}
+          # 动态拼接：myprovider/ + 模型名（从 Secret 读取）
+          model: myprovider/${{ secrets.MY_PRIVATE_MODEL }}
