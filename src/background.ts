@@ -460,6 +460,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       initMsg.translationEnabled = prefs.translationEnabled === true;
       const tdir = prefs.translationDirection;
       initMsg.translationDirection = tdir === 'zh-en' || tdir === 'en-zh' ? tdir : 'auto';
+      initMsg.translationTiming = prefs.translationTiming === 'final' ? 'final' : 'stream';
       // 热词随 INIT 下发：offscreen 建 recognizer 时一次性烘焙进配置
       const hotwords = (await chrome.storage.local.get('tmspeech_hotwords'))['tmspeech_hotwords'];
       if (Array.isArray(hotwords) && hotwords.length) initMsg.hotwords = hotwords;

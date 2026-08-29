@@ -26,10 +26,21 @@ let punctEpoch = 0;
 let translateWorker: Worker | null = null;
 let translateEnabled = false;
 let translateDirection: 'auto' | 'zh-en' | 'en-zh' = 'auto';
+// 翻译时机：stream=实时跟句（中间态重译）｜final=仅定稿（句完才翻，最省 CPU）
+let translationTiming: 'stream' | 'final' = 'stream';
 let translateWarned = false;
 let transInFlight = false;
 let transPending: { text: string; seq: number } | null = null;
 let transLastSent = '';
+// 流式重译冷却：业界 re-translation 节拍为 200–500ms 一译（Google/文献口径），
+// 此前"每次文本变化都翻"在连续语音下让 worker 全程满负荷空转翻中间态。
+// 冷却期内的新文本只更新 transPending（天然合并），冷却到期后翻最新一版。
+let transLastStreamAt = 0;
+let transCooldownTimer: any = null;
+const STREAM_COOLDOWN_MS = 500;
+// 定稿代次：每次 translateFinal 递增。流式请求发出时带上当时的代次，
+// 回包时代次已变说明该句已定稿（或会话已重启），过期译文直接丢弃不推给 content。
+let transStreamEpoch = 0;
 // 当前识别句的序号（从 1 起）。随 SENTENCE_DONE 递增，随每次 TRANSLATE 消息带给 worker，
 // worker 结果原样回传 → content 据此把译文路由到"当前句行"还是"上一句行"。
 let sentenceSeq = 1;
@@ -43,6 +54,15 @@ function createTranslateWorker() {
       // 测试请求的应答：直接回给测试发起方，不触碰流式/定稿状态机
       finishTranslateTest({ ok: !!m.ok && !!m.text, text: m.text || '', error: m.reason === 'no-model' ? 'no-model' : (m.error || ''), debug: m.debug });
       return;
+    }
+    if (m.kind !== 'final') {
+      // 代次守卫：发出后发生过定稿（或会话重启），这份中间态译文已过期——
+      // 丢弃不推给 content，避免旧句流式译文覆盖刚到的定稿译文
+      if (m.epoch !== transStreamEpoch) {
+        transInFlight = false;
+        pumpTranslate();
+        return;
+      }
     }
     if (m.ok && m.text) {
       if (m.kind === 'final') {
@@ -94,6 +114,8 @@ function cancelTranslateTest() {
     transInFlight = false;
     transPending = null;
     transLastSent = '';
+    if (transCooldownTimer) { clearTimeout(transCooldownTimer); transCooldownTimer = null; }
+    transLastStreamAt = 0;
     sentenceSeq = 1;
   }
   finishTranslateTest({ ok: false, error: 'cancelled' });
@@ -125,16 +147,28 @@ function destroyTranslateWorker() {
   transInFlight = false;
   transPending = null;
   transLastSent = '';
+  if (transCooldownTimer) { clearTimeout(transCooldownTimer); transCooldownTimer = null; }
+  transLastStreamAt = 0;
   sentenceSeq = 1;
 }
 
 function pumpTranslate() {
   if (!translateWorker || !translateEnabled || transInFlight || !transPending) return;
+  // 流式冷却：距上次流式翻译不足 500ms 就等一等。transPending 保留最新文本，
+  // 到期后由定时器重入——冷却期内多次变化合并为一次翻译。
+  const wait = STREAM_COOLDOWN_MS - (Date.now() - transLastStreamAt);
+  if (wait > 0) {
+    if (!transCooldownTimer) {
+      transCooldownTimer = setTimeout(() => { transCooldownTimer = null; pumpTranslate(); }, wait);
+    }
+    return;
+  }
   const { text, seq } = transPending;
   transPending = null;
   transInFlight = true;
   transLastSent = text;
-  translateWorker.postMessage({ type: 'TRANSLATE', text, seq, direction: translateDirection, kind: 'stream', wasmPaths: chrome.runtime.getURL('ort-wasm/') });
+  transLastStreamAt = Date.now();
+  translateWorker.postMessage({ type: 'TRANSLATE', text, seq, direction: translateDirection, kind: 'stream', epoch: transStreamEpoch, wasmPaths: chrome.runtime.getURL('ort-wasm/') });
 }
 
 // 流式：识别文本变化即入队翻译（同一文本不重复翻）。
@@ -166,6 +200,8 @@ function normalizeForTranslate(text: string): string {
 }
 
 function translateStream(text: string) {
+  // 仅定稿模式：中间态不翻译，译文只随 SENTENCE_DONE 出
+  if (translationTiming === 'final') return;
   if (!translateEnabled || !translateWorker || translateWarned || !text) return;
   text = normalizeForTranslate(text);
   if (text === transLastSent) return;
@@ -174,10 +210,12 @@ function translateStream(text: string) {
 }
 
 // 定稿：句子结束翻一次并记录（丢弃尚未翻译的流式文本，避免串句）
-// seq 取"刚完成句"的序号：调用点（onSentenceDone）在递增 sentenceSeq 之前执行
+// seq 取"刚完成句"的序号：调用点（onSentenceDone）在递增 sentenceSeq 之前执行。
+// 同时递增流式代次：worker 里在途的旧流式请求回包后会被代次守卫丢弃。
 function translateFinal(text: string) {
   if (!translateEnabled || !translateWorker || translateWarned || !text) return;
   transPending = null;
+  transStreamEpoch++;
   text = normalizeForTranslate(text);
   translateWorker.postMessage({ type: 'TRANSLATE', text, seq: sentenceSeq, direction: translateDirection, kind: 'final', wasmPaths: chrome.runtime.getURL('ort-wasm/') });
 }
@@ -445,6 +483,7 @@ function setupPort() {
       translateEnabled = msg.translationEnabled === true;
       translateDirection = msg.translationDirection === 'zh-en' || msg.translationDirection === 'en-zh'
         ? msg.translationDirection : 'auto';
+      translationTiming = msg.translationTiming === 'final' ? 'final' : 'stream';
       if (translateEnabled) ensureTranslateWorker();
       sentenceSeq = 1;
 

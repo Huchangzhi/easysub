@@ -803,7 +803,7 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
         <button type="button" id="helpBtnTranslate" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipTranslate">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         </button>
-        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipTranslate">把识别字幕实时翻译成另一语言。首次使用需从 GitHub Releases 下载翻译模型（中/英双向，约 216MB），解压后点击"选择模型"选中解压出的文件夹；设置从下一次启动会话生效。翻译在独立线程离线进行，不上传任何内容。</span>
+        <span class="help-tip flip" role="tooltip" id="helpTipTranslate">把识别字幕实时翻译成另一语言。首次使用需从 GitHub Releases 下载翻译模型（中/英双向，约 216MB），解压后点击"选择模型"选中解压出的文件夹；设置从下一次启动会话生效。翻译在独立线程离线进行，不上传任何内容。</span>
       </span>
       <button type="button" id="btnPickModel" class="icon-btn" style="margin-left:auto;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
@@ -814,6 +814,16 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
       <button type="button" class="seg active" data-dir="auto" role="radio" aria-checked="true"><span class="seg-name" data-key="translateAuto">自动</span></button>
       <button type="button" class="seg" data-dir="zh-en" role="radio" aria-checked="false"><span class="seg-name" data-key="translateZhEn">中→英</span></button>
       <button type="button" class="seg" data-dir="en-zh" role="radio" aria-checked="false"><span class="seg-name" data-key="translateEnZh">英→中</span></button>
+    </div>
+    <div class="seg-row" id="translateTimingRow" role="radiogroup" aria-labelledby="secTranslate" style="margin-top:6px;">
+      <button type="button" class="seg active" data-timing="stream" role="radio" aria-checked="true"><span class="seg-name" data-key="translateTimingStream">实时跟句</span></button>
+      <button type="button" class="seg" data-timing="final" role="radio" aria-checked="false"><span class="seg-name" data-key="translateTimingFinal">仅定稿</span></button>
+      <span class="help-wrap" style="margin-left:auto;">
+        <button type="button" id="helpBtnTranslateTiming" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipTranslateTiming">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipTranslateTiming">实时跟句：识别过程中反复重译中间结果，出译文快但更耗 CPU（每 0.5 秒最多一次）；仅定稿：每句说完才翻译一次，最省资源、译文不闪变。设置从下一次启动会话生效。</span>
+      </span>
     </div>
     <div class="translate-notice" id="translateNotice" style="display:none;"></div>
     <div class="row" style="margin-top:6px;">
@@ -898,7 +908,7 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
         <button type="button" id="helpBtnColorMode" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipColorMode">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         </button>
-        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipColorMode">切换面板深浅外观。浅色为独立调色（非反色）：白卡片、加深强调色，对比度已校准。选择自动保存。</span>
+        <span class="help-tip flip" role="tooltip" id="helpTipColorMode">切换面板深浅外观。浅色为独立调色（非反色）：白卡片、加深强调色，对比度已校准。选择自动保存。</span>
       </span>
     </div>
     <div class="cmode-row" role="radiogroup" aria-labelledby="colorModeLabel">
@@ -947,7 +957,7 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
         <button type="button" id="helpBtnBgScheme" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipBgScheme">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         </button>
-        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipBgScheme">面板底色与卡片明度四选一：曜石黑（默认）/ 纯黑 / 石墨蓝灰 / 暖碳。仅影响本面板外观，选择自动保存。</span>
+        <span class="help-tip flip" role="tooltip" id="helpTipBgScheme">面板底色与卡片明度四选一：曜石黑（默认）/ 纯黑 / 石墨蓝灰 / 暖碳。仅影响本面板外观，选择自动保存。</span>
       </span>
     </div>
     <div class="bsg-row" role="radiogroup" aria-labelledby="bgSchemeLabel">

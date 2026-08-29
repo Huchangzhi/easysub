@@ -54,6 +54,7 @@ const modelFolderPicker = $('modelFolderPicker') as HTMLInputElement;
 const translateNotice = $('translateNotice');
 const translateStatus = $('translateStatus');
 const translateDirRow = $('translateDirRow');
+const translateTimingRow = $('translateTimingRow');
 const TRANSLATE_RELEASES_URL = 'https://github.com/huchangzhi/easysub/releases';
 
 let locked = false;
@@ -146,6 +147,7 @@ async function applyLang() {
   $('pickModelLabel').textContent = tr('pickModel');
   $('testTranslateLabel').textContent = tr('testTranslate');
   $('helpTipTranslate').textContent = tr('helpTranslate');
+  $('helpTipTranslateTiming').textContent = tr('helpTranslateTiming');
   // —— 热词（窗中窗）+ 导出文案 ——
   $('hotwordsOpenLabel').textContent = tr('hotwordsOpen');
   $('hotwordsTitle').textContent = tr('hotwordsTitle');
@@ -207,6 +209,8 @@ async function loadPrefs() {
   chkTranslate.checked = prefs.translationEnabled === true;
   const tdir = prefs.translationDirection;
   applyTranslateDir(TRANSLATE_DIRS.includes(tdir) ? tdir : 'auto');
+  // 翻译时机：白名单校验，非法值回退 stream（实时跟句，与旧行为一致）
+  applyTranslateTiming(prefs.translationTiming === 'final' ? 'final' : 'stream');
   updateTranslateUi();
   // 历史字幕显示译文：默认开（!== false）
   chkTranscriptTr.checked = prefs.transcriptTrEnabled !== false;
@@ -913,6 +917,23 @@ document.querySelectorAll<HTMLButtonElement>('#translateDirRow .seg').forEach(b 
   };
 });
 
+// —— 翻译时机：stream=实时跟句（中间态重译，冷却 0.5s）｜final=仅定稿（句完才翻） ——
+function applyTranslateTiming(timing: string) {
+  document.querySelectorAll<HTMLButtonElement>('#translateTimingRow .seg').forEach(b => {
+    const on = b.dataset.timing === timing;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', String(on));
+  });
+}
+
+document.querySelectorAll<HTMLButtonElement>('#translateTimingRow .seg').forEach(b => {
+  b.onclick = () => {
+    const t = b.dataset.timing!;
+    applyTranslateTiming(t);
+    savePrefs({ translationTiming: t });
+  };
+});
+
 function buildTranslateNotice() {
   translateNotice.textContent = '';
   translateNotice.appendChild(document.createTextNode(tSync(currentLang, 'translateNeedModel') + ' '));
@@ -937,6 +958,7 @@ async function refreshTranslateStatus() {
 
 function updateTranslateUi() {
   translateDirRow.style.display = chkTranslate.checked ? '' : 'none';
+  translateTimingRow.style.display = chkTranslate.checked ? '' : 'none';
   translateNotice.style.display = chkTranslate.checked ? '' : 'none';
   if (chkTranslate.checked) buildTranslateNotice();
 }

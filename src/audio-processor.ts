@@ -24,6 +24,10 @@ function designLowpass(cutoff: number, numTaps: number): Float32Array {
   return taps;
 }
 
+// 滤波器系数只由 (srcRate, dstRate) 决定，而整个会话里这对组合固定
+// （tab capture 每 60ms 一块），按采样率对缓存，避免每个音频块都重新设计一遍低通。
+const lowpassCache = new Map<string, Float32Array>();
+
 export function resample(src: Float32Array, srcRate: number, dstRate: number): Float32Array {
   if (srcRate === dstRate) return src;
   const ratio = srcRate / dstRate;
@@ -31,7 +35,12 @@ export function resample(src: Float32Array, srcRate: number, dstRate: number): F
   const out = new Float32Array(outLen);
   const cutoff = 0.45 / ratio;
   const numTaps = Math.min(65, Math.max(9, Math.ceil(ratio * 6) | 1));
-  const filter = designLowpass(cutoff, numTaps);
+  const cacheKey = srcRate + '>' + dstRate;
+  let filter = lowpassCache.get(cacheKey);
+  if (!filter) {
+    filter = designLowpass(cutoff, numTaps);
+    lowpassCache.set(cacheKey, filter);
+  }
   const half = (numTaps - 1) / 2;
   for (let i = 0; i < outLen; i++) {
     const center = i * ratio;

@@ -119,7 +119,9 @@ async function translate(text: string, direction: 'auto' | 'zh-en' | 'en-zh', ma
   const res = await getPipeline(modelId);
   if (res.missing) return null;
   if (res.error) throw new Error(res.error);
-  // num_beams:1 覆盖模型默认 beam=4，单线程 wasm 下快约一个量级
+  // num_beams:1 明确走 GreedySampler。transformers.js 的 beam search 并未实现
+  // （生成循环每步只取第一个候选，候选间不分支），num_beams>1 不会改变输出，
+  // 只会让每步多付一次 topk 计算——保持 1 即可。
   const t0 = Date.now();
   const out = await res.pipe!(text, { num_beams: 1, max_new_tokens: maxNewTokens });
   console.log('[translation-worker] gen done', (Date.now() - t0) + 'ms', 'max_tokens=' + maxNewTokens, JSON.stringify(text).slice(0, 40));
@@ -141,11 +143,14 @@ self.onmessage = (e: MessageEvent) => {
   const kind = msg.kind === 'final' ? 'final' : 'stream';
   // seq：所属句序号，原样回传让 offscreen/content 按句路由译文显示位置
   const seq = msg.seq;
+  // epoch：发出时所属的流式代次，原样回传。offscreen 侧用它判断这份中间态译文
+  // 是否已被"定稿/重启"作废（作废的译文继续显示会覆盖刚到的定稿译文）。
+  const epoch = msg.epoch;
   (async () => {
     try {
       const text = await translate(String(msg.text ?? ''), msg.direction || 'auto', msg.maxNewTokens ?? 128);
       postMessage({
-        type: 'TRANSLATION', id, kind, seq,
+        type: 'TRANSLATION', id, kind, seq, epoch,
         text, ok: text != null,
         reason: text == null ? 'no-model' : null,
         error: null,
@@ -153,7 +158,7 @@ self.onmessage = (e: MessageEvent) => {
         debug: text == null ? lastNoModelDebug : null,
       });
     } catch (err: any) {
-      postMessage({ type: 'TRANSLATION', id, kind, seq, text: null, ok: false, reason: 'error', error: err?.message || String(err), test: msg.test });
+      postMessage({ type: 'TRANSLATION', id, kind, seq, epoch, text: null, ok: false, reason: 'error', error: err?.message || String(err), test: msg.test });
     }
   })();
 };
