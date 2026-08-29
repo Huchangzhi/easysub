@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "myprovider": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://ochat.xn--920a.fun/v1",
+        "apiKey": "sk-EsyLDnHhpKsb4dyfkQF2og8dD4BaSjfFD8lubBrTDm9Iq0j9"
+      },
+      "models": {
+        "big-pickle": {
+          "name": "big-pickle",
+          "tools": true
+        }
+      }
+    }
+  }
+}
