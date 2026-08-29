@@ -8,16 +8,16 @@ on:
 
 jobs:
   opencode:
-    # 关键防线：必须包含触发词，且评论者必须是仓库主人 (OWNER)
+    # 只要看到 /oc，且是你本人，就立刻干活
     if: |
-      (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode')) &&
+      contains(github.event.comment.body, '/oc') &&
       (github.event.comment.author_association == 'OWNER')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      contents: read        # 代码坚决只读
-      pull-requests: write  # 允许它回复 PR 评论
-      issues: write         # 允许它回复 Issue 评论
+      contents: read        # 坚决只读，不给写代码的权限
+      pull-requests: write  # 允许它在 PR 里回复评论
+      issues: write         # 允许它在 Issue 里回复评论
 
     steps:
       - name: Checkout repository
@@ -32,7 +32,8 @@ jobs:
           BASE_URL: ${{ secrets.MY_PRIVATE_URL }}
           API_KEY: ${{ secrets.MY_PRIVATE_KEY }}
         run: |
-          cat > opencode.json <<'EOF'
+          mkdir -p ~/.config/opencode
+          cat > ~/.config/opencode/opencode.json <<'EOF'
           {
             "$schema": "https://opencode.ai/config.json",
             "provider": {
@@ -52,11 +53,9 @@ jobs:
             }
           }
           EOF
-          
-          # 安全替换，防止 API Key 里的特殊符号搞坏 JSON
-          sed -i "s|MY_BASE_URL|${BASE_URL}|g" opencode.json
-          sed -i "s|MY_API_KEY|${API_KEY}|g" opencode.json
-          sed -i "s|MY_MODEL_NAME|${MODEL_NAME}|g" opencode.json
+          sed -i "s|MY_BASE_URL|${BASE_URL}|g" ~/.config/opencode/opencode.json
+          sed -i "s|MY_API_KEY|${API_KEY}|g" ~/.config/opencode/opencode.json
+          sed -i "s|MY_MODEL_NAME|${MODEL_NAME}|g" ~/.config/opencode/opencode.json
 
       - name: Run OpenCode
         uses: anomalyco/opencode/github@latest
