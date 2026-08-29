@@ -1,0 +1,37 @@
+name: opencode
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  opencode:
+    # 🛡️ 防盗门禁：必须输入暗号 (/oc 或 /opencode) 【并且】 必须是仓库的 Owner 或 Collaborator
+    if: |
+      (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode')) &&
+      (github.event.comment.author_association == 'OWNER' )
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        # 这里我把 v6 改成了目前最稳定的 v4，如果报错再换回 v6
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run OpenCode
+        uses: anomalyco/opencode/github@latest
+        env:
+          # 🔐 从你的私密保险箱里读取中转站地址和 Key
+          OPENAI_API_KEY: ${{ secrets.MY_PRIVATE_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.MY_PRIVATE_URL }}
+        with:
+          # 🔐 从保险箱里读取模型名称，深藏功与名
+          model: ${{ secrets.MY_PRIVATE_MODEL }}
