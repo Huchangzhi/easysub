@@ -8,24 +8,24 @@ on:
 
 jobs:
   opencode:
+    # 关键防线：必须包含触发词，且评论者必须是仓库主人 (OWNER)
     if: |
       (contains(github.event.comment.body, '/oc') || contains(github.event.comment.body, '/opencode')) &&
       (github.event.comment.author_association == 'OWNER')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      contents: read
-      pull-requests: write
-      issues: write
+      contents: read        # 代码坚决只读
+      pull-requests: write  # 允许它回复 PR 评论
+      issues: write         # 允许它回复 Issue 评论
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           persist-credentials: false
 
-      # 1. 动态生成 opencode.json 配置文件
       - name: Create opencode.json
         env:
           MODEL_NAME: ${{ secrets.MY_PRIVATE_MODEL }}
@@ -37,27 +37,28 @@ jobs:
             "$schema": "https://opencode.ai/config.json",
             "provider": {
               "myprovider": {
-                "name": "My Custom API",
                 "npm": "@ai-sdk/openai-compatible",
                 "options": {
-                  "baseURL": "${BASE_URL}",
-                  "apiKey": "{env:API_KEY}"
+                  "baseURL": "MY_BASE_URL",
+                  "apiKey": "MY_API_KEY"
                 },
                 "models": {
-                  "${MODEL_NAME}": {
-                    "name": "${MODEL_NAME}"
+                  "MY_MODEL_NAME": {
+                    "name": "MY_MODEL_NAME",
+                    "tools": true
                   }
                 }
               }
             }
           }
           EOF
+          
+          # 安全替换，防止 API Key 里的特殊符号搞坏 JSON
+          sed -i "s|MY_BASE_URL|${BASE_URL}|g" opencode.json
+          sed -i "s|MY_API_KEY|${API_KEY}|g" opencode.json
+          sed -i "s|MY_MODEL_NAME|${MODEL_NAME}|g" opencode.json
 
-      # 2. 运行 OpenCode
       - name: Run OpenCode
         uses: anomalyco/opencode/github@latest
-        env:
-          OPENCODE_CONFIG: ${{ github.workspace }}/opencode.json
-          API_KEY: ${{ secrets.MY_PRIVATE_KEY }}
         with:
           model: myprovider/${{ secrets.MY_PRIVATE_MODEL }}
