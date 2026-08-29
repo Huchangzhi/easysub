@@ -32,21 +32,20 @@ jobs:
           BASE_URL: ${{ secrets.MY_PRIVATE_URL }}
           API_KEY: ${{ secrets.MY_PRIVATE_KEY }}
         run: |
-          cat > opencode.json <<EOF
+          cat > opencode.json <<'EOF'
           {
-            "\$schema": "https://opencode.ai/config.json",
-            "providers": {
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {
               "myprovider": {
                 "name": "My Custom API",
-                "package": "@opencode-ai/ai/providers/openai-compatible",
+                "npm": "@ai-sdk/openai-compatible",
                 "options": {
                   "baseURL": "${BASE_URL}",
-                  "apiKey": "${API_KEY}"
+                  "apiKey": "{env:API_KEY}"
                 },
                 "models": {
                   "${MODEL_NAME}": {
-                    "name": "${MODEL_NAME}",
-                    "modelID": "${MODEL_NAME}"
+                    "name": "${MODEL_NAME}"
                   }
                 }
               }
@@ -54,11 +53,11 @@ jobs:
           }
           EOF
 
-      # 2. 运行 OpenCode，并通过 OPENCODE_CONFIG 明确指定配置文件
+      # 2. 运行 OpenCode
       - name: Run OpenCode
         uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_CONFIG: ${{ github.workspace }}/opencode.json
+          API_KEY: ${{ secrets.MY_PRIVATE_KEY }}
         with:
-          # 格式: <provider_id>/<model_id>
           model: myprovider/${{ secrets.MY_PRIVATE_MODEL }}
