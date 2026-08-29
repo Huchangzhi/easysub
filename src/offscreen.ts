@@ -139,8 +139,35 @@ function pumpTranslate() {
 
 // 流式：识别文本变化即入队翻译（同一文本不重复翻）。
 // translateWarned 置位后（模型缺失或加载失败已确诊）不再发送，避免每句/每次变化徒劳触发 worker。
+// 坑：ASR 输出全大写，标点模型对英文句也常给中文全角标点——这种"全大写+中文标点"
+// 形态远超出翻译模型的训练分布，质量掉得厉害。翻译前规范化：全角标点→半角，英文
+// 按句转"句首大写其余小写"（中文句子无大小写概念，原样放行）。
+const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
+// 句子边界：半角/全角句号问号叹号后跟空白（标点归属前一句，保留原样不断章取义）
+function sentenceCase(text: string): string {
+  return text.split(/(?<=[.!?。！？])\s+/).map((sentence) => {
+    if (CJK_RE.test(sentence)) return sentence;
+    const mi = sentence.search(/[A-Za-z]/);
+    if (mi === -1) return sentence;
+    const head = sentence.slice(0, mi);
+    const rest = sentence.slice(mi);
+    return head + rest.charAt(0).toUpperCase() + rest.slice(1).toLowerCase().replace(/(^|\s)i(\s|$)/g, '$1I$2');
+  }).join(' ');
+}
+// 显示用：只去全大写，保留标点模型打的中文标点断句
+function displayCase(text: string): string {
+  return sentenceCase(text);
+}
+function normalizeForTranslate(text: string): string {
+  const full = /[\uFF0C\u3002\uFF1F\uFF01\uFF1B\uFF1A\u201C\u201D\u2018\u2019\uFF08\uFF09\u3010\u3011]/;
+  const half = { '\uFF0C': ',', '\u3002': '.', '\uFF1F': '?', '\uFF01': '!', '\uFF1B': ';', '\uFF1A': ':', '\u201C': '"', '\u201D': '"', '\u2018': "'", '\u2019': "'", '\uFF08': '(', '\uFF09': ')', '\u3010': '[', '\u3011': ']' } as Record<string, string>;
+  const t = text.replace(full, (ch) => half[ch] ?? ch);
+  return sentenceCase(t);
+}
+
 function translateStream(text: string) {
   if (!translateEnabled || !translateWorker || translateWarned || !text) return;
+  text = normalizeForTranslate(text);
   if (text === transLastSent) return;
   transPending = { text, seq: sentenceSeq };
   pumpTranslate();
@@ -151,6 +178,7 @@ function translateStream(text: string) {
 function translateFinal(text: string) {
   if (!translateEnabled || !translateWorker || translateWarned || !text) return;
   transPending = null;
+  text = normalizeForTranslate(text);
   translateWorker.postMessage({ type: 'TRANSLATE', text, seq: sentenceSeq, direction: translateDirection, kind: 'final', wasmPaths: chrome.runtime.getURL('ort-wasm/') });
 }
 
@@ -439,7 +467,7 @@ function setupPort() {
         onTextChanged: (text) => {
           lastText = text;
           if (usePunct) {
-            const display = lastPunctText || text;
+            const display = displayCase(lastPunctText || text);
             sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: display })
             sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: display })
             sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: display })
@@ -453,23 +481,24 @@ function setupPort() {
                 // 不写 lastPunctText、不发消息。punctPending 已由 INIT/STOP 重置，无需在此清理。
                 if (epoch !== punctEpoch) return;
                 punctPending = false;
-                lastPunctText = addPunctuation(lastText);
+                lastPunctText = displayCase(addPunctuation(lastText));
                 sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: lastPunctText })
                 sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: lastPunctText })
                 sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: lastPunctText })
               }, 0);
             }
           } else {
-            sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: text })
-            sendSafe('FW_CT', { type: 'TEXT_CHANGED', text })
-            sendSafe('FW_POP', { type: 'TEXT_CHANGED', text })
+            const display = displayCase(text);
+            sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: display })
+            sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: display })
+            sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: display })
           }
           translateStream(text);
         },
         onSentenceDone: (text) => {
           // ponytail: addPunctuation 同步调 CT-Transformer 模型推理，会阻塞主线程
           // AudioWorklet 在音频线程持续缓冲，解阻塞后 pipeline 处理积压帧
-          prevSentence = usePunct ? addPunctuation(text) : text;
+          prevSentence = usePunct ? displayCase(addPunctuation(text)) : displayCase(text);
           lastText = '';
           lastPunctText = '';
           // 句序号：本句的序号（尚未递增），随后递增给下一句；content 据此路由译文归属
@@ -570,9 +599,10 @@ function setupPort() {
 
     if (msg.type === 'RESEND_CURRENT_TEXT') {
       if (lastText || prevSentence) {
-        sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: lastText });
-        sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: lastText });
-        sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: lastText });
+        const display = displayCase(lastText);
+        sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: display });
+        sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: display });
+        sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: display });
       }
     }
 
