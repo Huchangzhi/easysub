@@ -25,14 +25,13 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # 🔐 动态生成 opencode.json，所有敏感信息来自 Secrets
+      # 1. 动态生成 opencode.json 配置文件
       - name: Create opencode.json
         env:
           MODEL_NAME: ${{ secrets.MY_PRIVATE_MODEL }}
           BASE_URL: ${{ secrets.MY_PRIVATE_URL }}
           API_KEY: ${{ secrets.MY_PRIVATE_KEY }}
         run: |
-          # 使用 jq 或直接 cat 构建 JSON，注意转义
           cat > opencode.json <<EOF
           {
             "\$schema": "https://opencode.ai/config.json",
@@ -55,8 +54,11 @@ jobs:
           }
           EOF
 
+      # 2. 运行 OpenCode，并通过 OPENCODE_CONFIG 明确指定配置文件
       - name: Run OpenCode
         uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_CONFIG: ${{ github.workspace }}/opencode.json
         with:
-          # 动态拼接：myprovider/ + 模型名（从 Secret 读取）
+          # 格式: <provider_id>/<model_id>
           model: myprovider/${{ secrets.MY_PRIVATE_MODEL }}
