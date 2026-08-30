@@ -277,6 +277,14 @@ body.anim .container.loaded > :nth-child(8) { transition-delay: 280ms; }
 .source-hint {
   margin-top: 5px; font-size: 10.5px; line-height: 1.5; color: var(--text2);
 }
+/* 常驻引导提示：跳出浏览器使用的发现入口。与音源状态无关、永远可见，
+   视觉沿用普通音源提示（不抢眼，只需用户扫到即可） */
+.source-tip {
+  margin-top: 5px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text2);
+}
 
 /* Row */
 .row { display: flex; align-items: center; gap: 6px; }
@@ -671,6 +679,8 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
       </select>
       <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
+    <!-- 超出浏览器使用的引导提示：与音源状态无关，常驻展示 -->
+    <div class="source-hint source-tip" id="sourceTip">想在浏览器之外的软件上用字幕？试试改一下音频来源</div>
     <div class="source-hint" id="sourceHint" hidden></div>
 
     <span class="section-label sub-gap" id="secPunct">标点/断句</span>

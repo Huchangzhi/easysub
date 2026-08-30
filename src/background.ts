@@ -50,6 +50,13 @@ function sendToFloating(payload: any) {
   try { floatingPort.postMessage(payload); } catch {} // eslint-disable-line no-empty
 }
 
+// 字幕显示设置消息双扇出：tab 模式进页内叠层，system 模式进悬浮窗（同一套协议，
+// overlay.ts 共用实现）——popup 的锁定/字号/上一句/回看/外观调整实时同步到两个端
+function sendToDisplays(payload: any) {
+  if (captureTabId) sendToTab(captureTabId, payload);
+  sendToFloating(payload);
+}
+
 // —— 悬浮字幕窗开合（唯一入口：START_RECOGNITION 按音源自动决定，popup 不再手动开关）——
 async function openFloating() {
   // 已开着就聚焦；窗口 id 失效（用户手动关闭后 storage 之外的陈旧引用）则重建
@@ -389,8 +396,10 @@ function cleanupAll() {
   // 终态必须由 bg 在这里显式补发，否则已经打开的 popup 会永远停在 Running 界面。
   // （手动停止时 popup 本地已自行置为 Stopped，重复收到同一终态是幂等的。）
   persistSession();
-  // 悬浮窗同样要收到终态（它是独立显示端，不会收到下方 sendToPopup）
-  sendToFloating({ type: 'STATUS_CHANGED', status: 'Stopped' });
+  // 生命周期绑定（悬浮窗随会话）：会话停止即关闭悬浮窗——system 模式下它是唯一显示端，
+  // 会话结束没有继续存在的意义。closeFloating 会触发 windows.onRemoved，彼时
+  // pipelineStatus 已是 Stopped，onRemoved 里的"关窗即停止"守卫自然跳过，不会二次清理。
+  closeFloating();
   sendToPopup({ type: 'STATUS_CHANGED', status: 'Stopped' });
 }
 
@@ -615,15 +624,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // 三端记账由此发散：popup 锁定后 SW 重启/字幕层重建时读到的仍是旧值。
     // storage.local['tmspeech_locked'] 是唯一事实源，转发的同时必须持久化。
     chrome.storage.local.set({ [LOCK_KEY]: msg.locked === true }).catch(() => {});
-    if (captureTabId) sendToTab(captureTabId, { type: 'LOCK_TOGGLE', locked: msg.locked });
+    sendToDisplays({ type: 'LOCK_TOGGLE', locked: msg.locked });
   }
 
   if (msg.type === 'SET_FONT_SIZE') {
-    if (captureTabId) sendToTab(captureTabId, { type: 'SET_FONT_SIZE', fontSize: msg.fontSize });
+    sendToDisplays({ type: 'SET_FONT_SIZE', fontSize: msg.fontSize });
   }
 
   if (msg.type === 'SET_PREV_OPTS') {
-    if (captureTabId) sendToTab(captureTabId, { type: 'SET_PREV_OPTS', showPrev: msg.showPrev, prevOpacity: msg.prevOpacity });
+    sendToDisplays({ type: 'SET_PREV_OPTS', showPrev: msg.showPrev, prevOpacity: msg.prevOpacity });
   }
 
   if (msg.type === 'SET_ENDPOINT') {
@@ -644,11 +653,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'RESET_OVERLAY_POSITION') {
-    if (captureTabId) sendToTab(captureTabId, { type: 'RESET_OVERLAY_POSITION' });
+    sendToDisplays({ type: 'RESET_OVERLAY_POSITION' });
   }
 
   if (msg.type === 'FORWARD_TO_CONTENT') {
-    if (captureTabId) sendToTab(captureTabId, msg.payload);
+    // popup 的偏好修改（PREFS_PATCH 等）实时同步到页内叠层与悬浮窗
+    sendToDisplays(msg.payload);
   }
 
   if (msg.type === 'FORWARD_TO_POPUP') {
@@ -666,11 +676,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-// 悬浮窗被用户手动关闭：只清显示端引用，识别会话不受影响，可随时从 popup 重开
+// 悬浮窗被用户关闭：system 模式下它是唯一显示端兼控制器——关闭即视为结束会话，
+// 触发统一清理（关 offscreen、停采集）；tab 模式下窗口本就不存在，走不到这里。
 chrome.windows.onRemoved.addListener((closedWinId) => {
   if (closedWinId === floatingWinId) {
     floatingWinId = null;
     floatingPort = null;
+    if (sessionSource === 'system' && pipelineStatus === 'Running') {
+      console.log('[TM BG] 悬浮字幕窗已关闭，自动停止识别');
+      cleanupAll();
+    }
   }
 });
 

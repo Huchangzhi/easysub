@@ -9,9 +9,14 @@ const btnStop = $('btnStop') as HTMLButtonElement;
 // —— 音频来源（tab=当前标签页 / system=系统音频，Chrome 桌面选择器授权）——
 const selSource = $('selSource') as HTMLSelectElement;
 const sourceHintEl = $('sourceHint');
-// 坑：系统音频捕获仅 Windows/ChromeOS 支持（getDisplayMedia 选择器的「分享系统音频」
-// 勾选项），其余平台禁用该选项并展示提示，防止用户选了却无法出声音
-const SYSTEM_AUDIO_SUPPORTED = /Windows|CrOS|Chromium OS/i.test(navigator.userAgent);
+// 坑：系统音频捕获的支持范围随平台差异很大——getDisplayMedia 选择器的「分享系统音频」
+// 勾选项：Windows/ChromeOS 全版本支持；macOS 自 Chrome 141（且 macOS 14.2+）起支持；
+// Linux/安卓一律不支持（Linux 的 Chromium 明确拒绝采集系统音频）。其余平台禁用该选项
+// 并展示提示，防止用户选了却无法出声音。
+const UA = navigator.userAgent;
+const SYSTEM_AUDIO_SUPPORTED =
+  /Windows|CrOS|Chromium OS/i.test(UA) ||
+  (/Mac OS X|Macintosh/i.test(UA) && Number(UA.match(/Chrome\/(\d+)/)?.[1] ?? 0) >= 141);
 const chkOverlay = $('chkOverlay') as HTMLInputElement;
 const chkPunct = $('chkPunct') as HTMLInputElement;
 const chkShowPrev = $('chkShowPrev') as HTMLInputElement;
@@ -89,6 +94,7 @@ async function applyLang() {
   // 此处必须同步删除旧赋值，否则 null.textContent 抛错会中断整个 applyLang
   $('optSourceTab').textContent = tr('sourceTab');
   $('optSourceSystem').textContent = tr('sourceSystem');
+  $('sourceTip').textContent = tr('sourceOutsideTip');
   updateSourceHint();
   $('showSubtitles').textContent = tr('showSubtitles');
   $('fontLabel').textContent = tr('font');
