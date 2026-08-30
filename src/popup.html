@@ -261,11 +261,6 @@ body.anim .container.loaded > :nth-child(8) { transition-delay: 280ms; }
 
 /* Select */
 .select-wrap { position: relative; }
-.static-mode {
-  width: 100%; padding: 7px 10px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--surface); color: var(--text);
-  font: 400 12px/1.4 system-ui, sans-serif;
-}
 .select-wrap select {
   width: 100%; padding: 7px 28px 7px 10px; border: 1px solid var(--border);
   border-radius: var(--radius-btn); background: var(--surface-input); color: var(--text);
@@ -277,6 +272,10 @@ body.anim .container.loaded > :nth-child(8) { transition-delay: 280ms; }
 .select-wrap .arrow {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   width: 14px; height: 14px; color: var(--text2); pointer-events: none;
+}
+/* 音源提示行：选中系统音频时出现的操作指引小字 */
+.source-hint {
+  margin-top: 5px; font-size: 10.5px; line-height: 1.5; color: var(--text2);
 }
 
 /* Row */
@@ -666,8 +665,13 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
   <div class="card">
     <span class="section-label" id="audioSource">音频来源</span>
     <div class="select-wrap">
-      <div class="static-mode" id="sourceDesc">从当前标签页识别字幕</div>
+      <select id="selSource" aria-label="audio source">
+        <option value="tab" id="optSourceTab">当前标签页</option>
+        <option value="system" id="optSourceSystem">系统音频（整个屏幕）</option>
+      </select>
+      <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
+    <div class="source-hint" id="sourceHint" hidden></div>
 
     <span class="section-label sub-gap" id="secPunct">标点/断句</span>
     <div class="row">

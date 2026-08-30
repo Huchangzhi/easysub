@@ -10,6 +10,12 @@ const SESSION_KEY = 'runningSession';
 // storage，就会出现"三端锁态发散"（popup 说没锁 / 字幕层实际锁着 / 新建层按未锁绘制）。
 const LOCK_KEY = 'tmspeech_locked';
 let captureTabId: number | null = null;
+// 音频来源：'tab'=标签页捕获 | 'system'=系统音频（offscreen 内 getDisplayMedia 环回）。system 模式无目标
+// 标签页，captureTabId 恒为 null，"关标签页自动停止"/字幕层注入等 tab 逻辑全部天然跳过。
+let sessionSource: 'tab' | 'system' = 'tab';
+// 悬浮字幕窗（独立扩展页弹窗，可置顶画中画）：仅显示端，关窗不影响识别会话。
+let floatingWinId: number | null = null;
+let floatingPort: chrome.runtime.Port | null = null;
 let pipelineStatus = 'Stopped';
 // 会话开始时刻（Date.now()）：START 成功或 FW_POP 首见 Running 时盖章；
 // 纳入 persistSession 快照，SW 重启后 GET_STATUS 仍能还原真实计时基准。
@@ -38,13 +44,38 @@ function sendToTab(tabId: number, msg: any) {
   chrome.tabs.sendMessage(tabId, msg).catch(() => {});
 }
 
+// 悬浮字幕窗显示消息扇出：端口随窗口关闭已自动置空，发送失败（窗口正在关闭）静默忽略
+function sendToFloating(payload: any) {
+  if (!floatingPort) return;
+  try { floatingPort.postMessage(payload); } catch {} // eslint-disable-line no-empty
+}
+
+// —— 悬浮字幕窗开合（唯一入口：START_RECOGNITION 按音源自动决定，popup 不再手动开关）——
+async function openFloating() {
+  // 已开着就聚焦；窗口 id 失效（用户手动关闭后 storage 之外的陈旧引用）则重建
+  if (floatingWinId != null) {
+    try { await chrome.windows.update(floatingWinId, { focused: true }); return; } catch { floatingWinId = null; }
+  }
+  const win = await chrome.windows.create({
+    url: 'floating.html', type: 'popup', width: 780, height: 240,
+  });
+  floatingWinId = win?.id ?? null;
+}
+
+function closeFloating() {
+  if (floatingWinId != null) {
+    chrome.windows.remove(floatingWinId).catch(() => {});
+    // floatingWinId/floatingPort 由下方 onRemoved 监听器统一清理
+  }
+}
+
 function persistSession() {
   // 坑：会话快照的单一出口。所有改写 captureTabId/pipelineStatus 的地方都要同步调它，
   // 否则 SW 冷启动后 onRemoved/RECONNECT 会读到过期快照（把已停会话当活的，或反之）。
-  if (pipelineStatus === 'Running' && captureTabId != null) {
+  if (pipelineStatus === 'Running' && (captureTabId != null || sessionSource === 'system')) {
     // 坑：startedAt 仅在 >0 时写入——SW 冷启动恢复路径（RECONNECT 自愈）内存里是 0，
     // 若无条件覆盖会把重启前已盖章的真实开始时刻冲掉，popup 计时又归零
-    const snap: any = { tabId: captureTabId, status: pipelineStatus };
+    const snap: any = { tabId: captureTabId, status: pipelineStatus, source: sessionSource };
     if (sessionStartedAt > 0) snap.startedAt = sessionStartedAt;
     chrome.storage.session.set({ [SESSION_KEY]: snap }).catch(() => {});
   } else {
@@ -120,12 +151,24 @@ async function ensureOffscreen() {
   if (exists) return;
   await chrome.offscreen.createDocument({
     url: 'offscreen.html',
-    reasons: ['USER_MEDIA'] as any,
+    // DISPLAY_MEDIA：system 模式在文档内直接 getDisplayMedia（桌面采集+系统音频）
+    reasons: ['USER_MEDIA', 'DISPLAY_MEDIA'] as any,
     justification: 'Speech recognition audio processing',
   });
 }
 
 chrome.runtime.onConnect.addListener((port) => {
+  // —— 悬浮字幕窗端点：独立显示端，与 offscreen 端点互不相干 ——
+  if (port.name === 'floating') {
+    floatingPort = port;
+    port.onDisconnect.addListener(() => {
+      if (floatingPort === port) floatingPort = null;
+    });
+    // 刚打开的悬浮窗不知道会话状态：补发当前状态 + 让 offscreen 重发当前句文本
+    sendToFloating({ type: 'STATUS_CHANGED', status: pipelineStatus, startedAt: sessionStartedAt });
+    try { offscreenPort?.postMessage({ type: 'RESEND_CURRENT_TEXT' }); } catch {} // eslint-disable-line no-empty
+    return;
+  }
   if (port.name !== 'offscreen') return;
   offscreenPort = port;
 
@@ -143,8 +186,10 @@ chrome.runtime.onConnect.addListener((port) => {
       }
       return;
     }
-    if (msg.type === 'FW_CT' && captureTabId) {
-      sendToTab(captureTabId, msg.payload);
+    if (msg.type === 'FW_CT') {
+      // 字幕显示消息双扇出：tab 模式进页面字幕层；system 模式无 tab，悬浮窗是唯一显示端
+      if (captureTabId) sendToTab(captureTabId, msg.payload);
+      sendToFloating(msg.payload);
     }
     if (msg.type === 'FW_POP') {
       const p = msg.payload || {};
@@ -157,6 +202,10 @@ chrome.runtime.onConnect.addListener((port) => {
       if (p.type === 'LEVEL') {
         bgLevels.push(Math.max(0, Math.min(1, Number(p.v) || 0)));
         if (bgLevels.length > LEVEL_SNAPSHOT_MAX) bgLevels.shift();
+      }
+      // 悬浮窗只消费这三类 FW_POP 消息（其余显示类已由 FW_CT 扇出覆盖，避免重复）
+      if (p.type === 'STATUS_CHANGED' || p.type === 'ERROR' || p.type === 'LEVEL') {
+        sendToFloating(p);
       }
       if (p.type === 'STATUS_CHANGED') {
         pipelineStatus = p.status;
@@ -182,13 +231,29 @@ chrome.runtime.onConnect.addListener((port) => {
       }
       if (p.type === 'LOG') console.log('[TM BG]', p.message);
       if (msg.payload?.type === 'REQUEST_STREAM') {
+        // 仅 tab 模式会出现（system 模式由 offscreen 直接 getDisplayMedia）
         handleRequestStream(msg.payload.tabId);
       }
       if (msg.payload?.type === 'RECONNECT') {
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         console.log('[TM BG] offscreen 重连, status=', msg.payload.status, 'tabId=', msg.payload.tabId);
         pipelineStatus = msg.payload.status;
-        if (msg.payload.tabId && msg.payload.status === 'Running') {
+        const reviveSource: 'tab' | 'system' = msg.payload.source === 'system' ? 'system' : 'tab';
+        sessionSource = reviveSource;
+        if (msg.payload.status === 'Running' && reviveSource === 'system') {
+          // system 模式自愈：无标签页可校验，直接恢复会话状态（悬浮窗/popup 靠扇出消息刷新）
+          captureTabId = null;
+          const backfill = !sessionStartedAt
+            ? chrome.storage.session.get(SESSION_KEY).then((stored) => {
+                const sess = stored[SESSION_KEY] as { startedAt?: number } | undefined;
+                if (sess?.startedAt) sessionStartedAt = sess.startedAt;
+              }).catch(() => {})
+            : Promise.resolve();
+          backfill.then(() => {
+            sendToPopup({ type: 'STATUS_CHANGED', status: 'Running', startedAt: sessionStartedAt });
+            persistSession();
+          });
+        } else if (msg.payload.tabId && msg.payload.status === 'Running') {
           // 坑：RECONNECT 自愈绝不能无条件复活会话——offscreen 文档独立于 SW 存活，
           // 它上报的标签页可能在 SW 死亡期间已被用户关闭；不校验存活的话，
           // "关标签页自动停止"会被这条自愈路径原样绕过（复活后继续解码静音）。
@@ -271,6 +336,7 @@ async function checkPendingInit(port: chrome.runtime.Port) {
 
 // offscreen 模型就绪后回调：此刻才签发 capture streamId 并立即投递，把
 // "签发→消费"的时间窗压缩到毫秒级，根治 streamId 过期导致的 "Error starting tab capture"。
+// 仅 tab 模式有这个往返（system 模式由 offscreen 内 getDisplayMedia 直接开流，无 streamId）。
 async function handleRequestStream(tabId: number | null) {
   try {
     // 坑：本 SW 可能刚被这条消息唤醒、内存态全空，所以优先用 offscreen 随消息带来的
@@ -278,7 +344,7 @@ async function handleRequestStream(tabId: number | null) {
     const target = tabId ?? captureTabId;
     if (!target) throw new Error('没有可捕获的目标标签页');
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: target });
-    offscreenPort?.postMessage({ type: 'STREAM_READY', streamId });
+    offscreenPort?.postMessage({ type: 'STREAM_READY', streamId, source: 'tab' });
   } catch (e: any) {
     console.log('[TM BG] 获取音频流失败:', e?.message || e);
     sendToPopup({ type: 'ERROR', message: `获取音频流失败: ${e?.message || e}` });
@@ -304,6 +370,7 @@ function cleanupAll() {
   sessionStartedAt = 0; // 会话终结即清开始戳（epoch 失配/STOP/错误清理统一走这里）
   bgLevels = []; // 波形快照随之清空：停止后的面板不再显示已结束会话的电平残留
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  sessionSource = 'tab';
   const tabId = captureTabId;
   pipelineStatus = 'Stopped';
   hideOverlay(tabId);
@@ -322,6 +389,8 @@ function cleanupAll() {
   // 终态必须由 bg 在这里显式补发，否则已经打开的 popup 会永远停在 Running 界面。
   // （手动停止时 popup 本地已自行置为 Stopped，重复收到同一终态是幂等的。）
   persistSession();
+  // 悬浮窗同样要收到终态（它是独立显示端，不会收到下方 sendToPopup）
+  sendToFloating({ type: 'STATUS_CHANGED', status: 'Stopped' });
   sendToPopup({ type: 'STATUS_CHANGED', status: 'Stopped' });
 }
 
@@ -409,9 +478,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (stale()) { sendResponse({}); return; }
 
       pipelineStatus = 'Running';
-      captureTabId = msg.tabId || null;
+      // 音频来源：system 模式无目标标签页（captureTabId 恒 null），跳过字幕层注入等 tab 逻辑
+      const source: 'tab' | 'system' = msg.source === 'system' ? 'system' : 'tab';
+      sessionSource = source;
+      captureTabId = source === 'system' ? null : (msg.tabId || null);
       sessionStartedAt = Date.now(); // START 成功即盖会话开始戳，计时基准唯一事实源
       persistSession();
+      // 用户确认：音源为系统 → 自动开悬浮字幕窗（system 模式唯一显示端）；音源为标签页 →
+      // 关闭悬浮窗，字幕回到浏览器内叠层。失败仅记日志，不阻断识别启动。
+      if (source === 'system') {
+        openFloating().catch((e) => console.log('[TM BG] 自动打开悬浮字幕窗失败:', e));
+      } else {
+        closeFloating();
+      }
       if (captureTabId && msg.overlayVisible) {
         const alreadyInjected = await isContentScriptInjected(captureTabId);
         if (stale()) { sendResponse({}); return; }
@@ -452,7 +531,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const punctPref = (await chrome.storage.local.get('tmspeech_use_punct'))['tmspeech_use_punct'];
       const prefs = ((await chrome.storage.local.get('tmspeech_prefs'))['tmspeech_prefs'] as any) || {};
       if (stale()) { sendResponse({}); return; }
-      const initMsg: any = { type: 'INIT_OFFSCREEN', tabId: msg.tabId, lang, usePunct: punctPref !== false };
+      const initMsg: any = { type: 'INIT_OFFSCREEN', tabId: msg.tabId, source, lang, usePunct: punctPref !== false };
       if (prefs.endpointRule1) initMsg.endpointRule1 = prefs.endpointRule1;
       if (prefs.endpointRule2) initMsg.endpointRule2 = prefs.endpointRule2;
       if (prefs.endpointRule3) initMsg.endpointRule3 = prefs.endpointRule3;
@@ -575,6 +654,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'FORWARD_TO_POPUP') {
     sendToPopup(msg.payload);
     if (msg.payload?.type === 'STATUS_CHANGED') { pipelineStatus = msg.payload.status; persistSession(); }
+  }
+
+  // —— 悬浮字幕窗：开合统一走 openFloating()/closeFloating()，START 时按音源自动触发 ——
+  if (msg.type === 'OPEN_FLOATING') {
+    openFloating().catch((e) => console.log('[TM BG] 打开悬浮字幕窗失败:', e));
+  }
+
+  if (msg.type === 'CLOSE_FLOATING') {
+    closeFloating();
+  }
+});
+
+// 悬浮窗被用户手动关闭：只清显示端引用，识别会话不受影响，可随时从 popup 重开
+chrome.windows.onRemoved.addListener((closedWinId) => {
+  if (closedWinId === floatingWinId) {
+    floatingWinId = null;
+    floatingPort = null;
   }
 });
 

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>易字幕 悬浮窗</title>
+  <!-- pitfall: 不要在此处加 <script src="floating.js">，
+       HtmlPlugin 会自动注入 <script defer src="floating.js">，
+       手动加会导致同一文件执行两遍 -->
+  <style>
+    /* 样式口径与 content.ts 页内字幕层一致（毛玻璃深底），PiP 置顶时会整份克隆进画中画文档 */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      font: 500 12px/1.55 system-ui, -apple-system, sans-serif;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.92);
+      overflow: hidden;
+      user-select: none;
+    }
+    /* 字幕主体：占满窗口的玻璃底板（窗口本身即字幕条） */
+    #bar {
+      position: relative;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 34px 22px 16px;
+      background: rgba(10, 10, 20, 0.75);
+      backdrop-filter: blur(16px) saturate(180%);
+      -webkit-backdrop-filter: blur(16px) saturate(180%);
+      border-radius: 14px;
+      box-shadow: 0 8px 48px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+    /* 工具条：右上角悬浮小按钮组 */
+    .toolbar {
+      position: absolute;
+      top: 7px;
+      right: 9px;
+      display: flex;
+      gap: 5px;
+      opacity: 0.55;
+      transition: opacity 160ms ease;
+    }
+    #bar:hover .toolbar { opacity: 1; }
+    .toolbar button {
+      width: 26px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      cursor: pointer;
+      font: 600 11px/1 system-ui, sans-serif;
+    }
+    .toolbar button:hover { background: rgba(255, 255, 255, 0.16); }
+    .toolbar button:disabled { opacity: 0.35; cursor: default; }
+    .toolbar button.pinned { background: #4c9ee8; border-color: transparent; color: #fff; }
+    .sub-lines { display: flex; flex-direction: column; gap: 2px; }
+    #prevLine {
+      font-size: 20px;
+      line-height: 1.35;
+      color: rgba(255, 255, 255, 0.55);
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: none;
+    }
+    #prevTrans {
+      font-size: 13px;
+      line-height: 1.4;
+      color: #9fc3ea;
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: none;
+    }
+    #curLine {
+      font-size: 34px;
+      line-height: 1.3;
+      font-weight: 600;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #curLine.error { color: #ff6b61; font-size: 15px; font-weight: 500; }
+    #transLine {
+      font-size: 17px;
+      line-height: 1.4;
+      color: #9fc3ea;
+      white-space: pre-wrap;
+      word-break: break-word;
+      display: none;
+    }
+    /* 底部电平条：细线，宽度随实时音量电平伸缩（system 模式下唯一的"有声音"反馈） */
+    #levelBar {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      width: 100%;
+      height: 3px;
+      background: rgba(255, 255, 255, 0.07);
+    }
+    #levelFill {
+      height: 100%;
+      width: 0%;
+      background: #4c9ee8;
+      transition: width 120ms ease-out;
+    }
+    /* PiP 置顶后本窗口留下的占位提示 */
+    #pipHint {
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255, 255, 255, 0.55);
+      font-size: 13px;
+      text-align: center;
+      padding: 16px;
+    }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <div class="toolbar">
+      <button id="btnPin" type="button" title="置顶显示">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76V7a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3.76a2 2 0 0 0 .59 1.42l1.82 1.82H5.59l1.82-1.82A2 2 0 0 0 9 10.76z"/></svg>
+      </button>
+      <button id="btnFontDown" type="button" title="缩小字号">A-</button>
+      <button id="btnFontUp" type="button" title="放大字号">A+</button>
+      <button id="btnStop" type="button" title="停止识别" disabled>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+      </button>
+    </div>
+    <div class="sub-lines">
+      <div id="prevLine"></div>
+      <div id="prevTrans"></div>
+      <div id="curLine"></div>
+      <div id="transLine"></div>
+    </div>
+    <div id="levelBar"><div id="levelFill"></div></div>
+  </div>
+  <div id="pipHint" hidden></div>
+</body>
+</html>

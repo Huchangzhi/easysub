@@ -7,6 +7,10 @@ let pipeline: Pipeline | null = null;
 let port: chrome.runtime.Port;
 let reconnectTabId: number | null = null;
 let reconnectStreamId: string | null = null;
+// 音频来源：'tab'=标签页捕获（tabCapture 签发 streamId）｜'system'=系统音频
+// （getDisplayMedia 选择器授权，桌面采集音频环回，见 startSystemAudioCapture）。
+// INIT 时由 background 随消息带来，贯穿 REQUEST_STREAM/RECONNECT 全链路。
+let reconnectSource: 'tab' | 'system' = 'tab';
 let currentLang = 'zh_CN';
 let lastText = '';
 let prevSentence = '';
@@ -340,9 +344,14 @@ function stopAudio() {
 }
 
 async function startAudioCapture(streamId: string) {
+  // tab 模式：tabCapture 在 SW 侧签发 streamId，这里消费。system 模式不走此函数
+  // （无 streamId 可用，见 startSystemAudioCapture）。
   const constraints: any = {
     audio: {
-      mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId },
+      mandatory: {
+        chromeMediaSource: 'tab',
+        chromeMediaSourceId: streamId,
+      },
     },
   };
   // 坑："Error starting tab capture" 常见于上一次捕获刚被销毁就立刻开新流——
@@ -356,10 +365,31 @@ async function startAudioCapture(streamId: string) {
     await new Promise(r => setTimeout(r, 400));
     stream = await (navigator.mediaDevices.getUserMedia as any)(constraints);
   }
+  await pipeCaptureStream(stream, 'tab');
+}
+
+// 系统音频（整机环回）：MV3 的 desktopCapture 两条路都被 Chrome 堵死——SW 里调用
+// 强制要求 targetTab（crbug 41493089），其 streamId 又官方确认无法在 offscreen 文档
+// 消费（crbug 326509126）。唯一可行组合就是 offscreen 文档内直接 getDisplayMedia：
+// 选择器本身即授权（用户勾「分享系统音频」），无 OS 级权限弹窗、无 streamId 传递。
+async function startSystemAudioCapture() {
+  const media = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+  // 只要音频轨；视频轨停掉——系统环回音频独立于屏幕画面，停视频不影响。
+  media.getVideoTracks().forEach((t) => t.stop());
+  const audio = media.getAudioTracks()[0];
+  if (!audio) throw new Error('未获取到系统音频轨道');
+  await pipeCaptureStream(new MediaStream([audio]), 'system');
+}
+
+async function pipeCaptureStream(stream: MediaStream, source: 'tab' | 'system') {
   captureStream = stream;
-  audioEl = document.createElement('audio');
-  audioEl.srcObject = stream;
-  audioEl.play().catch(() => {});
+  // 坑：tab 模式必须建 <audio> 回放——被捕获标签页的声音经捕获流转发，不回放就是静音；
+  // system 模式是系统环回（loopback），原声照常出扬声器，回放反而造成回声，绝不能开。
+  if (source === 'tab') {
+    audioEl = document.createElement('audio');
+    audioEl.srcObject = stream;
+    audioEl.play().catch(() => {});
+  }
 
   if ((self as any).AudioWorklet) {
     try {
@@ -459,7 +489,7 @@ function setupPort() {
     console.log('[TM Offscreen] 管道还在运行，1 秒后重连...');
     setTimeout(() => {
       setupPort();
-      sendSafe('FW_POP', { type: 'RECONNECT', tabId: reconnectTabId, streamId: reconnectStreamId, status: 'Running' });
+      sendSafe('FW_POP', { type: 'RECONNECT', tabId: reconnectTabId, streamId: reconnectStreamId, source: reconnectSource, status: 'Running' });
     }, 1000);
   });
 
@@ -471,6 +501,7 @@ function setupPort() {
       log('收到 INIT_OFFSCREEN');
       reconnectTabId = msg.tabId || null;
       reconnectStreamId = msg.streamId || null;
+      reconnectSource = msg.source === 'system' ? 'system' : 'tab';
       if (msg.lang) currentLang = msg.lang;
       usePunct = msg.usePunct !== false;
 
@@ -622,8 +653,22 @@ function setupPort() {
         await pipeline!.start();
         // 坑：capture streamId 有效期很短，必须在消费前一刻才签发。此刻 WASM/模型已就绪，
         // 向 background 要一个全新的 streamId 并立即开流。旧实现"启动时预签发、
-        // 模型加载完才消费"，时间窗一长就报 "Error starting tab capture"。
-        sendSafe('FW_POP', { type: 'REQUEST_STREAM', tabId: msg.tabId });
+        // 模型加载完才消费"，时间窗一长就会报 "Error starting tab capture"。
+        // system 模式没有 streamId 可用（desktopCapture 无法跨进 offscreen，见
+        // startSystemAudioCapture 注释）：就绪后直接弹 getDisplayMedia 选择器。
+        if (reconnectSource === 'system') {
+          startSystemAudioCapture().catch((e: any) => {
+            log('系统音频捕获失败或已取消: ' + (e?.message || e));
+            // 用户关掉选择器：NotAllowedError/AbortError 都算主动取消，报统一文案
+            const cancelled = e?.name === 'NotAllowedError' || e?.name === 'AbortError';
+            sendSafe('FW_POP', {
+              type: 'ERROR',
+              message: cancelled ? tSync(currentLang, 'pickerCancelled') : `系统音频捕获失败: ${e?.message || e}`,
+            });
+          });
+        } else {
+          sendSafe('FW_POP', { type: 'REQUEST_STREAM', tabId: reconnectTabId, source: 'tab' });
+        }
         } catch (e: any) { log('INIT_OFFSCREEN async 异常: ' + await describeWasmException(e)); throw e; }
       })().catch(async (e) => {
         log('Pipeline start 异常: ' + await describeWasmException(e));
@@ -657,6 +702,7 @@ function setupPort() {
 
     if (msg.type === 'STREAM_READY') {
       // background 对 REQUEST_STREAM 的应答：拿到新鲜 streamId，立即开流。
+      // 仅 tab 模式会收到（system 模式走 startSystemAudioCapture，无此消息）。
       if (!pipeline) { log('STREAM_READY 到达时会话已停止，丢弃'); return; }
       log('收到 STREAM_READY，开始音频捕获');
       reconnectStreamId = msg.streamId || null;

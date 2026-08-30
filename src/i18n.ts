@@ -151,6 +151,17 @@ const strings: Record<string, Record<string, string>> = {
     // —— 字幕记录导出 ——
     exportLabel: '导出',
     exportHelp: '导出当前保存的字幕记录（含译文，若有）：TXT 纯文本 / SRT 字幕（可导入播放器）/ JSON 原数据。',
+    // —— 音频来源：系统音频（desktopCapture）+ 悬浮字幕窗 ——
+    sourceTab: '当前标签页',
+    sourceSystem: '系统音频（整个屏幕）',
+    sourceHintSystem: '开始识别后将弹出 Chrome 屏幕选择器：请选择「整个屏幕」并勾选「分享系统音频」（仅 Windows / ChromeOS 支持）。',
+    sourceHintNoSysAudio: '当前平台不支持系统音频捕获（仅 Windows / ChromeOS），已禁用该选项。',
+    pickerCancelled: '已取消屏幕选择，识别未开始',
+    floatPin: '置顶显示',
+    floatUnpin: '取消置顶',
+    floatPinnedHint: '字幕已进入置顶画中画窗口，可拖到任意位置；关闭它或再点「置顶」可回到普通悬浮窗。',
+    floatFontUp: '放大字号',
+    floatFontDown: '缩小字号',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -284,6 +295,17 @@ const strings: Record<string, Record<string, string>> = {
     // —— Transcript export ——
     exportLabel: 'Export',
     exportHelp: 'Export the saved transcript (includes translations when present): TXT plain text / SRT subtitles (importable into players) / JSON raw data.',
+    // —— Audio source: system audio (desktopCapture) + floating window ——
+    sourceTab: 'Current tab',
+    sourceSystem: 'System audio (entire screen)',
+    sourceHintSystem: 'After you press Start, Chrome shows a picker: choose "Entire screen" and tick "Share system audio" (Windows / ChromeOS only).',
+    sourceHintNoSysAudio: 'System audio capture is not supported on this platform (Windows / ChromeOS only); the option is disabled.',
+    pickerCancelled: 'Screen picking cancelled — recognition not started',
+    floatPin: 'Pin on top',
+    floatUnpin: 'Unpin',
+    floatPinnedHint: 'Subtitles moved into the always-on-top picture-in-picture window — drag it anywhere. Close it (or click "Unpin") to return to the normal window.',
+    floatFontUp: 'Increase font size',
+    floatFontDown: 'Decrease font size',
   },
 };
 

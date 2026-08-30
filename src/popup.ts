@@ -6,6 +6,12 @@ const $ = (id: string) => document.getElementById(id)!;
 const statusDot = $('statusDot');
 const btnStart = $('btnStart') as HTMLButtonElement;
 const btnStop = $('btnStop') as HTMLButtonElement;
+// —— 音频来源（tab=当前标签页 / system=系统音频，Chrome 桌面选择器授权）——
+const selSource = $('selSource') as HTMLSelectElement;
+const sourceHintEl = $('sourceHint');
+// 坑：系统音频捕获仅 Windows/ChromeOS 支持（getDisplayMedia 选择器的「分享系统音频」
+// 勾选项），其余平台禁用该选项并展示提示，防止用户选了却无法出声音
+const SYSTEM_AUDIO_SUPPORTED = /Windows|CrOS|Chromium OS/i.test(navigator.userAgent);
 const chkOverlay = $('chkOverlay') as HTMLInputElement;
 const chkPunct = $('chkPunct') as HTMLInputElement;
 const chkShowPrev = $('chkShowPrev') as HTMLInputElement;
@@ -79,7 +85,11 @@ async function applyLang() {
   $('btnStartText').textContent = tr('btnStart');
   $('btnStopText').textContent = tr('btnStop');
   $('audioSource').textContent = tr('audioSource');
-  $('sourceDesc').textContent = tr('sourceDesc');
+  // 坑：sourceDesc 静态块已被音源下拉替换（#sourceDesc 元素不存在），
+  // 此处必须同步删除旧赋值，否则 null.textContent 抛错会中断整个 applyLang
+  $('optSourceTab').textContent = tr('sourceTab');
+  $('optSourceSystem').textContent = tr('sourceSystem');
+  updateSourceHint();
   $('showSubtitles').textContent = tr('showSubtitles');
   $('fontLabel').textContent = tr('font');
   $('modelInfo').textContent = tr('modelInfo');
@@ -172,6 +182,11 @@ async function applyLang() {
 async function loadPrefs() {
   const r = await chrome.storage.local.get(PREFS_KEY);
   const prefs: Record<string, any> = r[PREFS_KEY] || {};
+  // 音源恢复：仅支持平台才接受 system；不支持平台禁用系统音频选项并强制回 tab
+  const optSystem = selSource.querySelector<HTMLOptionElement>('option[value="system"]');
+  if (optSystem && !SYSTEM_AUDIO_SUPPORTED) optSystem.disabled = true;
+  selSource.value = SYSTEM_AUDIO_SUPPORTED && prefs.audioSource === 'system' ? 'system' : 'tab';
+  updateSourceHint();
   if (prefs.fontSize) {
     fontSizeSlider.value = String(prefs.fontSize);
     fontSizeLabel.textContent = String(prefs.fontSize);
@@ -233,6 +248,17 @@ function savePrefs(partial: Record<string, any>) {
     const merged = { ...((r[PREFS_KEY] as any) || {}), ...partial };
     chrome.storage.local.set({ [PREFS_KEY]: merged });
   });
+}
+
+// 音源提示随当前选择刷新：仅 system 时展示（支持平台给操作指引，不支持平台给禁用原因）
+function updateSourceHint() {
+  if (selSource.value !== 'system') {
+    sourceHintEl.hidden = true;
+    sourceHintEl.textContent = '';
+    return;
+  }
+  sourceHintEl.textContent = tSync(currentLang, SYSTEM_AUDIO_SUPPORTED ? 'sourceHintSystem' : 'sourceHintNoSysAudio');
+  sourceHintEl.hidden = false;
 }
 
 // —— C. 主题系统：切 body[data-theme] 换 CSS 变量组，纯属性切换零重排成本 ——
@@ -637,7 +663,23 @@ function updateLockUI() {
     : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg><span id="lockLabel">' + tr('lock') + '</span>';
 }
 
+selSource.onchange = () => {
+  savePrefs({ audioSource: selSource.value === 'system' ? 'system' : 'tab' });
+  updateSourceHint();
+};
+
 btnStart.onclick = async () => {
+  const source: 'tab' | 'system' = selSource.value === 'system' && SYSTEM_AUDIO_SUPPORTED ? 'system' : 'tab';
+  // 系统音频模式不依赖活动标签页（captureTabId 恒 null，字幕走悬浮窗），跳过 noActiveTab 检查
+  if (source === 'system') {
+    chrome.runtime.sendMessage({
+      type: 'START_RECOGNITION',
+      source,
+      overlayVisible: chkOverlay.checked,
+    }).catch(() => {});
+    setStatus('Running');
+    return;
+  }
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const tabId = tabs[0]?.id;
   if (!tabId) { log(tSync(currentLang, 'noActiveTab')); return; }
@@ -645,6 +687,7 @@ btnStart.onclick = async () => {
   chrome.runtime.sendMessage({
     type: 'START_RECOGNITION',
     tabId,
+    source,
     overlayVisible: chkOverlay.checked,
   }).catch(() => {});
   setStatus('Running');

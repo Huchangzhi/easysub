@@ -9,6 +9,7 @@ module.exports = {
     content: './src/content.ts',
     popup: './src/popup.ts',
     offscreen: './src/offscreen.ts',
+    floating: './src/floating.ts',
     'translation-worker': './src/translation-worker.ts',
     permission: './src/permission.ts',
     i18n: './src/i18n.ts', // ponytail: 纯导出模块做 entry 生成孤立 i18n.js，不被任何页面引用
@@ -62,6 +63,11 @@ module.exports = {
       template: 'src/permission.html',
       filename: 'permission.html',
       chunks: ['permission'],
+    }),
+    new HtmlPlugin({
+      template: 'src/floating.html',
+      filename: 'floating.html',
+      chunks: ['floating'],
     }),
     // ponytail: transformers src/env.js 用 import.meta，webpack 5.87+ 把它替换成
     // { url, webpack:5, main: __webpack_module__===... }，而经典 worker（非 ESM 输出）
