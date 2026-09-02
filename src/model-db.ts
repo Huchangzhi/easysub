@@ -37,6 +37,18 @@ export async function saveModelFile(key: string, data: ArrayBuffer): Promise<voi
   }
 }
 
+// 直接存 File/Blob（IndexedDB 原生支持）：ASR 模型 412MB，避免 arrayBuffer() 拷贝一份内存
+export async function saveModelBlob(key: string, blob: Blob): Promise<void> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(blob, key);
+    await txDone(tx);
+  } finally {
+    db.close();
+  }
+}
+
 export async function getModelFile(key: string): Promise<Blob | null> {
   const db = await openDb();
   try {
@@ -73,6 +85,23 @@ export async function clearModels(): Promise<void> {
   try {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).clear();
+    await txDone(tx);
+  } finally {
+    db.close();
+  }
+}
+
+// 定向清理：只删匹配的键。翻译模型重传走这里（只删 opus-mt*），
+// 否则 clear() 会把 ASR 模型（__asr_wasm_data）一起清掉，用户就得重新导入 412MB
+export async function deleteModelKeys(match: (key: string) => boolean): Promise<void> {
+  const keys = await listModelKeys();
+  const doomed = keys.filter(match);
+  if (doomed.length === 0) return;
+  const db = await openDb();
+  try {
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    for (const key of doomed) store.delete(key);
     await txDone(tx);
   } finally {
     db.close();

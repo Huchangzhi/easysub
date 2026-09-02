@@ -9,9 +9,9 @@
        手动加会导致同一文件执行两遍 -->
 </head>
 <body>
+  <!-- 只保留 preload.js：它仅定义 Module 不拉资源。三个 wasm 脚本由 offscreen.ts 在
+       查完 IndexedDB（nomodel 版需先把模型转成 blob URL 供 locateFile 使用）后按序动态注入，
+       静态写在这里会抢在 blob URL 就绪前求值，加载器会立刻 fetch 一个不存在的扩展内 .data -->
   <script src="wasm/preload.js"></script>
-  <script src="wasm/sherpa-onnx-wasm-main-asr.js"></script>
-  <script src="wasm/sherpa-onnx-asr.js"></script>
-  <script src="wasm/sherpa-onnx-punctuation.js"></script>
 </body>
 </html>

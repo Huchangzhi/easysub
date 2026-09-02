@@ -148,6 +148,15 @@ const strings: Record<string, Record<string, string>> = {
     hotwordsSaved: '已保存',
     hotwordsCount: '{n} 条',
     close: '关闭',
+    // —— 语音识别模型缺失引导（nomodel 版安装包，窗中窗）——
+    asrModelTitle: '缺少语音识别模型',
+    asrModelHint: '当前安装包未内置语音识别模型（约 412MB），需要下载后导入一次即可，之后不会再询问。',
+    asrModelGithub: '从 GitHub Releases 下载模型',
+    asrModelGitee: '从 Gitee 下载模型（国内访问 GitHub 不畅时推荐）',
+    asrModelImportBtn: '选择已下载的模型文件导入',
+    asrModelImporting: '正在导入模型（约 412MB，请稍候）...',
+    asrModelImported: '模型导入成功，正在启动识别...',
+    asrModelError: '不是有效的模型文件（需为 sherpa-onnx-wasm-main-asr.data）',
     // —— 字幕记录导出 ——
     exportLabel: '导出',
     exportHelp: '导出当前保存的字幕记录（含译文，若有）：TXT 纯文本 / SRT 字幕（可导入播放器）/ JSON 原数据。',
@@ -292,6 +301,15 @@ const strings: Record<string, Record<string, string>> = {
     hotwordsSaved: 'Saved',
     hotwordsCount: '{n} item(s)',
     close: 'Close',
+    // —— ASR model missing guide (nomodel package, window-in-window) ——
+    asrModelTitle: 'Speech Recognition Model Missing',
+    asrModelHint: 'This package does not include the speech recognition model (~412MB). Download and import it once — you will not be asked again.',
+    asrModelGithub: 'Download model from GitHub Releases',
+    asrModelGitee: 'Download model from Gitee (recommended in China if GitHub is slow)',
+    asrModelImportBtn: 'Import the downloaded model file',
+    asrModelImporting: 'Importing model (~412MB, please wait)...',
+    asrModelImported: 'Model imported, starting recognition...',
+    asrModelError: 'Not a valid model file (expected sherpa-onnx-wasm-main-asr.data)',
     // —— Transcript export ——
     exportLabel: 'Export',
     exportHelp: 'Export the saved transcript (includes translations when present): TXT plain text / SRT subtitles (importable into players) / JSON raw data.',

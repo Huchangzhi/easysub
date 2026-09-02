@@ -600,6 +600,9 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
 }
 .subpanel textarea:focus { outline: 1.5px solid var(--accent); outline-offset: -1px; }
 .subpanel-foot { margin-top: 2px; }
+/* 引导面板里的下载超链接（同 .translate-notice a 的强调色风格） */
+.subpanel a { color: var(--accent); text-decoration: none; }
+.subpanel a:hover { text-decoration: underline; }
 .export-select {
   background: var(--surface-input); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px;
@@ -1019,6 +1022,29 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
     </div>
     <textarea id="hotwordsInput" rows="8" spellcheck="false"></textarea>
     <p class="subpanel-hint" id="hotwordsNextRun"></p>
+  </div>
+
+  <!-- 语音识别模型缺失·窗中窗：nomodel 版安装包点「启动」时引导下载+导入一次 -->
+  <div class="subpanel" id="asrModelPanel" hidden>
+    <div class="subpanel-head">
+      <span class="section-label" id="asrModelTitle">缺少语音识别模型</span>
+      <button type="button" id="btnAsrModelClose" class="icon-btn" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <p class="subpanel-hint" id="asrModelHint"></p>
+    <p class="subpanel-hint" style="display:flex;flex-direction:column;gap:6px;">
+      <a id="asrModelLinkGithub" href="https://github.com/huchangzhi/easysub/releases" target="_blank" rel="noopener"></a>
+      <a id="asrModelLinkGitee" href="https://gitee.com/huchangzhi/easysub-model/releases" target="_blank" rel="noopener"></a>
+    </p>
+    <div class="row subpanel-foot">
+      <span class="model-info" id="asrModelStatus"></span>
+      <button type="button" id="btnAsrModelImport" class="icon-btn" style="margin-left:auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span id="asrModelImportLabel">选择已下载的模型文件导入</span>
+      </button>
+    </div>
+    <input type="file" id="asrModelPicker" accept=".data,application/octet-stream" style="display:none;">
   </div>
 
   <div class="disclaimer" id="disclaimer">字幕由模型识别，不保证准确</div>

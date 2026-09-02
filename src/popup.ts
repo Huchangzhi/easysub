@@ -1,5 +1,5 @@
 import { getLang, setLang, tSync } from './i18n';
-import { listModelKeys, saveModelFile, clearModels } from './model-db';
+import { listModelKeys, saveModelFile, saveModelBlob, getModelFile, deleteModelKeys } from './model-db';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -67,6 +67,9 @@ const translateStatus = $('translateStatus');
 const translateDirRow = $('translateDirRow');
 const translateTimingRow = $('translateTimingRow');
 const TRANSLATE_RELEASES_URL = 'https://github.com/huchangzhi/easysub/releases';
+// —— ASR 模型缺失引导（nomodel 版安装包）——
+const ASR_DATA_PATH = 'wasm/sherpa-onnx-wasm-main-asr.data';
+const ASR_DB_KEY = '__asr_wasm_data';
 
 let locked = false;
 let lastStatus = 'Stopped';
@@ -171,6 +174,13 @@ async function applyLang() {
   $('hotwordsNextRun').textContent = tr('hotwordsNextRun');
   $('hotwordsSaveLabel').textContent = tr('hotwordsSave');
   $('btnHotwordsClose').setAttribute('aria-label', tr('close'));
+  // —— ASR 模型缺失引导（窗中窗）——
+  $('asrModelTitle').textContent = tr('asrModelTitle');
+  $('asrModelHint').textContent = tr('asrModelHint');
+  $('asrModelLinkGithub').textContent = tr('asrModelGithub');
+  $('asrModelLinkGitee').textContent = tr('asrModelGitee');
+  $('asrModelImportLabel').textContent = tr('asrModelImportBtn');
+  $('btnAsrModelClose').setAttribute('aria-label', tr('close'));
   $('exportLabel').textContent = tr('exportLabel');
   $('helpTipExport').textContent = tr('exportHelp');
   refreshHotwordsStatus();
@@ -530,7 +540,11 @@ btnHotwordsSave.onclick = saveHotwords;
 btnHotwordsClose.onclick = closeHotwords;
 hotwordsInput.oninput = updateHotwordsCount;
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !hotwordsPanel.hidden) closeHotwords();
+  if (e.key === 'Escape') {
+    if (!hotwordsPanel.hidden) closeHotwords();
+    // Esc 关 ASR 引导面板 = 取消本次启动（settleAsrPanel 为函数声明，模块内可前向引用）
+    else if (!asrModelPanel.hidden) settleAsrPanel(false);
+  }
 });
 
 // —— 字幕记录导出：TXT / SRT / JSON（含译文）——
@@ -675,6 +689,8 @@ selSource.onchange = () => {
 };
 
 btnStart.onclick = async () => {
+  // nomodel 版门卫：包内无 .data 且未导入过 → 弹窗中窗引导，导入成功自动继续本次启动
+  if (!(await ensureAsrModel())) return;
   const source: 'tab' | 'system' = selSource.value === 'system' && SYSTEM_AUDIO_SUPPORTED ? 'system' : 'tab';
   // 系统音频模式不依赖活动标签页（captureTabId 恒 null，字幕走悬浮窗），跳过 noActiveTab 检查
   if (source === 'system') {
@@ -702,6 +718,57 @@ btnStart.onclick = async () => {
 btnStop.onclick = () => {
   chrome.runtime.sendMessage({ type: 'STOP_RECOGNITION' }).catch(() => {});
   setStatus('Stopped');
+};
+
+// —— ASR 模型缺失引导（nomodel 版安装包）——
+// 检测顺序：HEAD 探测包内 .data（full/lite/开发版恒存在）→ IndexedDB 已导入（上传一次
+// 后永不再问）→ 都没有才弹窗中窗。Promise 在「导入成功(true)」或「手动关闭(false)」时落定。
+const asrModelPanel = $('asrModelPanel') as HTMLDivElement;
+const asrModelStatus = $('asrModelStatus');
+const btnAsrModelImport = $('btnAsrModelImport') as HTMLButtonElement;
+const asrModelPicker = $('asrModelPicker') as HTMLInputElement;
+let asrPanelResolve: ((ok: boolean) => void) | null = null;
+
+async function ensureAsrModel(): Promise<boolean> {
+  try {
+    const res = await fetch(chrome.runtime.getURL(ASR_DATA_PATH), { method: 'HEAD' });
+    if (res.ok) return true;
+  } catch { /* nomodel 包 404 或离线异常，继续查 IndexedDB */ }
+  try {
+    const blob = await getModelFile(ASR_DB_KEY);
+    if (blob && blob.size > 0) return true;
+  } catch { /* 库损坏视为未导入 */ }
+  asrModelPanel.hidden = false;
+  asrModelStatus.textContent = '';
+  return new Promise<boolean>(resolve => { asrPanelResolve = resolve; });
+}
+
+function settleAsrPanel(ok: boolean) {
+  asrModelPanel.hidden = true;
+  if (asrPanelResolve) { asrPanelResolve(ok); asrPanelResolve = null; }
+}
+$('btnAsrModelClose').onclick = () => settleAsrPanel(false);
+
+btnAsrModelImport.onclick = () => asrModelPicker.click();
+
+asrModelPicker.onchange = async () => {
+  const f = asrModelPicker.files?.[0];
+  asrModelPicker.value = '';
+  if (!f) return;
+  // 宽松校验：emscripten 加载器按 .data 提取文件系统映像，只能接受同格式单文件
+  if (!f.name.endsWith('.data') || f.size < 100 * 1024 * 1024) {
+    asrModelStatus.textContent = tSync(currentLang, 'asrModelError');
+    return;
+  }
+  asrModelStatus.textContent = tSync(currentLang, 'asrModelImporting');
+  try {
+    // 直接存 File（IndexedDB 原生支持 Blob），避免 412MB arrayBuffer 拷贝
+    await saveModelBlob(ASR_DB_KEY, f);
+    asrModelStatus.textContent = tSync(currentLang, 'asrModelImported');
+    settleAsrPanel(true); // 导入成功：关面板并自动继续被拦下的启动
+  } catch (e: any) {
+    log(tSync(currentLang, 'errorPrefix').replace('{m}', String(e?.message || e)));
+  }
 };
 
 chkOverlay.onchange = () => {
@@ -1065,7 +1132,8 @@ modelFolderPicker.onchange = async () => {
   const files = modelFolderPicker.files;
   if (!files || files.length === 0) return;
   try {
-    await clearModels();
+    // 只清翻译模型键，保留 __asr_wasm_data：否则重传翻译模型会把 412MB 的 ASR 模型也清掉
+    await deleteModelKeys(k => k.includes('opus-mt'));
     let n = 0;
     for (const f of Array.from(files)) {
       // webkitRelativePath 形如 `<选中文件夹>/opus-mt-en-zh/config.json`，

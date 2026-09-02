@@ -2,6 +2,36 @@ import { Pipeline, JobStatus } from './pipeline';
 import { tSync } from './i18n';
 import { addPunctuation } from './punctuator';
 import { resample } from './audio-processor';
+import { getModelFile } from './model-db';
+
+// ---- wasm 脚本动态注入（nomodel 版支持）----
+// offscreen.html 只静态加载 preload.js（仅定义 Module 不拉资源）。三个 wasm 脚本必须等
+// IndexedDB 检查完成后再注入：nomodel 包里没有 .data，需要先把用户导入的模型读成 blob URL
+// 挂到 window.__asrDataUrl，preload.js 的 locateFile 会在加载器求值瞬间同步取用它；若包内
+// 自带 .data（full/lite/开发版）则 __asrDataUrl 为空，locateFile 走原 chrome.runtime URL。
+const WASM_SCRIPTS = [
+  'wasm/sherpa-onnx-wasm-main-asr.js',
+  'wasm/sherpa-onnx-asr.js',
+  'wasm/sherpa-onnx-punctuation.js',
+];
+
+function injectScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = chrome.runtime.getURL(src);
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`加载 ${src} 失败`));
+    document.body.appendChild(s);
+  });
+}
+
+const asrDataReady = (async () => {
+  try {
+    const blob = await getModelFile('__asr_wasm_data');
+    if (blob && blob.size > 0) (window as any).__asrDataUrl = URL.createObjectURL(blob);
+  } catch { /* 无模型也不阻断注入：包内有 .data 的构建照常工作 */ }
+  for (const src of WASM_SCRIPTS) await injectScript(src);
+})();
 
 let pipeline: Pipeline | null = null;
 let port: chrome.runtime.Port;
@@ -742,6 +772,8 @@ setupPort();
 // （外层 catch 会发 FW_POP ERROR），由 background 统一清理；否则轮询永不退出，
 // 会话永远停在"等待识别"且无任何错误上报。
 async function waitForWasm(): Promise<void> {
+  // 先等脚本注入完成（含 IndexedDB → blob URL），再轮询 __wasmReady
+  await asrDataReady;
   if ((window as any).__wasmReady) return;
   log('等待 WASM 加载...');
   const deadline = Date.now() + 30_000;

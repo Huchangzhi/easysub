@@ -104,10 +104,14 @@ jobs:
           name: extension-v${{ github.event.inputs.version }}
           path: dist
 
-      - name: Package extension (full)
+      - name: Package extension (full + nomodel)
         run: |
+          # nomodel 版：去掉 412MB 的 ASR 模型文件（Edge 商店对包体积有限制，装不下 full 版），
+          # 模型以单文件作为独立资产发布，用户首次点「启动」时按引导导入一次即可
+          cp dist/wasm/sherpa-onnx-wasm-main-asr.data ./sherpa-onnx-wasm-main-asr.data
           cd dist
           zip -r ../easysub-v${{ github.event.inputs.version }}-full.zip .
+          zip -r ../easysub-v${{ github.event.inputs.version }}-nomodel.zip . -x "wasm/sherpa-onnx-wasm-main-asr.data"
 
       - uses: actions/download-artifact@v4
         with:
@@ -157,6 +161,11 @@ jobs:
             - 大小: ~357MB
             - 精度更高，适合需要最佳识别质量的场景
 
+            ### nomodel（不含识别模型，适合 Edge 商店 / 小体积安装）
+            - 不包含语音识别模型，压缩包仅几十 MB
+            - 需要额外下载模型文件 `sherpa-onnx-wasm-main-asr.data`（约 412MB，见下方资产列表）
+            - 安装步骤：加载扩展后点击面板「启动」，会弹出模型引导窗，选择已下载的 `.data` 文件导入一次即可（之后不再询问）
+
             ### lite
             - 模型: Zipformer 中英双语, int8 量化
             - 大小: ~150MB
@@ -172,10 +181,18 @@ jobs:
             3. 点击「选择模型」，选中解压出的 `opus-mt-en-zh` / `opus-mt-zh-en` 所在的父文件夹
             4. 重新开始一次识别会话生效（翻译在本地离线进行，不上传任何内容）
 
+            ### 语音识别模型单文件（nomodel 版用户需要）
+            `sherpa-onnx-wasm-main-asr.data`（约 412MB）
+
+            **中国大陆用户访问 GitHub 不畅时，请从 Gitee 镜像仓库下载模型：**
+            https://gitee.com/huchangzhi/easysub-model/releases
+
             Chrome → 扩展程序 → 加载已解压的扩展 → 选择解压后的目录
           files: |
             easysub-v${{ github.event.inputs.version }}-full.zip
+            easysub-v${{ github.event.inputs.version }}-nomodel.zip
             easysub-v${{ github.event.inputs.version }}-lite.zip
             easysub-translation-models-v${{ github.event.inputs.version }}.zip
+            sherpa-onnx-wasm-main-asr.data
           draft: false
           prerelease: false
