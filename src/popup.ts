@@ -179,6 +179,7 @@ async function applyLang() {
   $('asrModelHint').textContent = tr('asrModelHint');
   $('asrModelLinkGithub').textContent = tr('asrModelGithub');
   $('asrModelLinkGitee').textContent = tr('asrModelGitee');
+  $('asrModelLinkModelScope').textContent = tr('asrModelModelScope');
   $('asrModelImportLabel').textContent = tr('asrModelImportBtn');
   $('btnAsrModelClose').setAttribute('aria-label', tr('close'));
   $('exportLabel').textContent = tr('exportLabel');
