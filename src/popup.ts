@@ -182,6 +182,13 @@ async function applyLang() {
   $('asrModelLinkModelScope').textContent = tr('asrModelModelScope');
   $('asrModelImportLabel').textContent = tr('asrModelImportBtn');
   $('btnAsrModelClose').setAttribute('aria-label', tr('close'));
+  // 坑：下载进行中 applyLang 不能覆盖按钮标签（会把「正在下载…」冲掉）
+  if (!($('btnAsrModelDownload') as HTMLButtonElement).disabled) {
+    $('asrModelDownloadLabel').textContent = tr('asrModelDownloadBtn');
+  }
+  $('asrAltToggle').textContent =
+    ($('asrAltLinks').classList.contains('open') ? '▲ ' : '▼ ') + tr('asrModelAltToggle');
+  $('reselectModelLabel').textContent = tr('reselectModel');
   $('exportLabel').textContent = tr('exportLabel');
   $('helpTipExport').textContent = tr('exportHelp');
   refreshHotwordsStatus();
@@ -544,7 +551,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!hotwordsPanel.hidden) closeHotwords();
     // Esc 关 ASR 引导面板 = 取消本次启动（settleAsrPanel 为函数声明，模块内可前向引用）
-    else if (!asrModelPanel.hidden) settleAsrPanel(false);
+    else if (!asrModelPanel.hidden) { asrDlAbort?.abort(); settleAsrPanel(false); }
   }
 });
 
@@ -724,11 +731,51 @@ btnStop.onclick = () => {
 // —— ASR 模型缺失引导（nomodel 版安装包）——
 // 检测顺序：HEAD 探测包内 .data（full/lite/开发版恒存在）→ IndexedDB 已导入（上传一次
 // 后永不再问）→ 都没有才弹窗中窗。Promise 在「导入成功(true)」或「手动关闭(false)」时落定。
+const ASR_MODEL_URL = 'https://modelscope.cn/models/hcz1017/easysub-model/resolve/master/sherpa-onnx-wasm-main-asr.data';
 const asrModelPanel = $('asrModelPanel') as HTMLDivElement;
 const asrModelStatus = $('asrModelStatus');
 const btnAsrModelImport = $('btnAsrModelImport') as HTMLButtonElement;
 const asrModelPicker = $('asrModelPicker') as HTMLInputElement;
+const btnReselectModel = $('btnReselectModel') as HTMLButtonElement;
+const btnAsrModelDownload = $('btnAsrModelDownload') as HTMLButtonElement;
+const asrProgressWrap = $('asrProgressWrap') as HTMLDivElement;
+const asrProgressFill = $('asrProgressFill') as HTMLDivElement;
+const asrProgressText = $('asrProgressText');
+const asrAltToggle = $('asrAltToggle') as HTMLButtonElement;
+const asrAltLinks = $('asrAltLinks') as HTMLDivElement;
 let asrPanelResolve: ((ok: boolean) => void) | null = null;
+let asrDlAbort: AbortController | null = null;
+
+function refreshAsrPanelLang() {
+  // 打开前按当前语言刷新文案（直链 href 在 HTML 写死，文案走 i18n）
+  $('asrModelTitle').textContent = tSync(currentLang, 'asrModelTitle');
+  $('asrModelHint').textContent = tSync(currentLang, 'asrModelHint');
+  $('asrModelLinkGithub').textContent = tSync(currentLang, 'asrModelGithub');
+  $('asrModelLinkGitee').textContent = tSync(currentLang, 'asrModelGitee');
+  $('asrModelLinkModelScope').textContent = tSync(currentLang, 'asrModelModelScope');
+  $('asrModelImportLabel').textContent = tSync(currentLang, 'asrModelImportBtn');
+  $('asrAltToggle').textContent =
+    (asrAltLinks.classList.contains('open') ? '▲ ' : '▼ ') + tSync(currentLang, 'asrModelAltToggle');
+  if (!btnAsrModelDownload.disabled) {
+    $('asrModelDownloadLabel').textContent = tSync(currentLang, 'asrModelDownloadBtn');
+  }
+}
+
+function openAsrModelPanel() {
+  refreshAsrPanelLang();
+  asrModelStatus.textContent = '';
+  resetAsrDownloadUi();
+  asrModelPanel.hidden = false;
+}
+
+function resetAsrDownloadUi() {
+  btnAsrModelDownload.disabled = false;
+  $('asrModelDownloadLabel').textContent = tSync(currentLang, 'asrModelDownloadBtn');
+  asrProgressWrap.hidden = true;
+  asrProgressFill.style.width = '0%';
+  asrProgressText.textContent = '';
+  ($('asrDlWarn') as HTMLElement).hidden = true;
+}
 
 async function ensureAsrModel(): Promise<boolean> {
   try {
@@ -739,16 +786,72 @@ async function ensureAsrModel(): Promise<boolean> {
     const blob = await getModelFile(ASR_DB_KEY);
     if (blob && blob.size > 0) return true;
   } catch { /* 库损坏视为未导入 */ }
-  asrModelPanel.hidden = false;
-  asrModelStatus.textContent = '';
+  openAsrModelPanel();
   return new Promise<boolean>(resolve => { asrPanelResolve = resolve; });
 }
 
 function settleAsrPanel(ok: boolean) {
   asrModelPanel.hidden = true;
+  if (ok) btnReselectModel.hidden = false; // 导入成功 → 显示重新选择按钮
   if (asrPanelResolve) { asrPanelResolve(ok); asrPanelResolve = null; }
 }
-$('btnAsrModelClose').onclick = () => settleAsrPanel(false);
+$('btnAsrModelClose').onclick = () => { asrDlAbort?.abort(); settleAsrPanel(false); };
+
+// —— 一键下载：popup 直连 ModelScope 流式下载 → IndexedDB ——
+// host_permissions 已含 <all_urls>，不新增权限；扩展页 fetch 不受目标站 CORS 限制。
+asrAltToggle.onclick = () => {
+  const open = asrAltLinks.classList.toggle('open');
+  asrAltToggle.textContent = (open ? '▲ ' : '▼ ') + tSync(currentLang, 'asrModelAltToggle');
+};
+
+function fmtMB(bytes: number) { return (bytes / 1024 / 1024).toFixed(1) + ' MB'; }
+
+btnAsrModelDownload.onclick = async () => {
+  btnAsrModelDownload.disabled = true;
+  $('asrModelDownloadLabel').textContent = tSync(currentLang, 'asrModelDownloading');
+  asrProgressWrap.hidden = false;
+  asrProgressFill.style.width = '0%';
+  // 下载全程跑在 popup 里：窗口一关 fetch 即断且无断点续传，先亮出保窗提醒
+  $('asrDlWarn').textContent = tSync(currentLang, 'asrModelDlKeepOpen');
+  ($('asrDlWarn') as HTMLElement).hidden = false;
+  asrModelStatus.textContent = '';
+  asrDlAbort = new AbortController();
+  try {
+    const res = await fetch(ASR_MODEL_URL, { signal: asrDlAbort.signal });
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+    const total = Number(res.headers.get('Content-Length')) || 0;
+    const reader = res.body.getReader();
+    const chunks: BlobPart[] = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.byteLength;
+      // 进度：有 Content-Length 走百分比，没有退化为已下载 MB 数
+      if (total > 0) {
+        const pct = Math.min(100, Math.round((received / total) * 100));
+        asrProgressFill.style.width = pct + '%';
+        asrProgressText.textContent = pct + '% · ' + fmtMB(received) + ' / ' + fmtMB(total);
+      } else {
+        asrProgressFill.style.width = '50%';
+        asrProgressText.textContent = fmtMB(received);
+      }
+    }
+    asrModelStatus.textContent = tSync(currentLang, 'asrModelDownloadDone');
+    // 直接存 Blob（IndexedDB 原生支持），避免再拷贝一份 412MB
+    await saveModelBlob(ASR_DB_KEY, new Blob(chunks));
+    asrModelStatus.textContent = tSync(currentLang, 'asrModelImported');
+    settleAsrPanel(true); // 自动继续被拦下的启动
+  } catch (e: any) {
+    if (e?.name === 'AbortError') return; // 关闭面板触发的取消：静默复位即可
+    asrProgressWrap.hidden = true;
+    asrModelStatus.textContent = tSync(currentLang, 'asrModelDownloadErr');
+  } finally {
+    asrDlAbort = null;
+    if (!asrModelPanel.hidden) resetAsrDownloadUi();
+  }
+};
 
 btnAsrModelImport.onclick = () => asrModelPicker.click();
 
@@ -1217,6 +1320,19 @@ loadPrefs().then(initRangeFills); // storage 值写回滑杆后再刷填充色
 refreshTranslateStatus(); // 独立于 prefs，直接查 IndexedDB 模型安装状态
 loadTranscript();
 applyLang();
+// 已导入过 ASR 模型则显示「重新选择识别模型」按钮（位于音频来源上方）
+// 只有 nomodel 版且 IndexedDB 里有模型才显示：完整/lite 版包内自带，无需重新选择
+(async () => {
+  try {
+    const res = await fetch(chrome.runtime.getURL(ASR_DATA_PATH), { method: 'HEAD' });
+    if (res.ok) return; // 包内有模型，永不显示按钮
+  } catch { /* 探测失败按 nomodel 处理 */ }
+  try {
+    const blob = await getModelFile(ASR_DB_KEY);
+    if (blob && blob.size > 0) btnReselectModel.hidden = false;
+  } catch { /* 库异常保持隐藏 */ }
+})();
+btnReselectModel.onclick = () => { openAsrModelPanel(); };
 chrome.storage.local.get('tmspeech_use_punct').then(r => {
   chkPunct.checked = r['tmspeech_use_punct'] !== false;
 });

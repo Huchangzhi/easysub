@@ -319,6 +319,9 @@ body.anim .container.loaded > :nth-child(8) { transition-delay: 280ms; }
 .row input[type="checkbox"].toggle-sm:checked:active::after { transform: translateX(13px); }
 
 /* Icon button */
+/* 坑：hidden 属性的 display:none 来自 UA 样式表，会被 .icon-btn 等作者样式的 display 覆盖
+   （作者样式优先级高于 UA），导致 hidden 失效元素照常显示。全局兜底，一劳永逸 */
+[hidden] { display: none !important; }
 .icon-btn {
   display: flex; align-items: center; gap: 4px;
   /* 坑：与 .btn 同批收敛（4×10→3×8），视觉重量随整体增密下调 */
@@ -603,6 +606,16 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
 /* 引导面板里的下载超链接（同 .translate-notice a 的强调色风格） */
 .subpanel a { color: var(--accent); text-decoration: none; }
 .subpanel a:hover { text-decoration: underline; }
+/* 下载进度条（ASR 模型窗中窗） */
+.asr-progress-wrap { width: 100%; margin: 6px 0 2px; display: flex; flex-direction: column; gap: 3px; }
+.asr-progress-bar { width: 100%; height: 6px; border-radius: 3px; background: var(--surface-input); overflow: hidden; }
+.asr-progress-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--accent); transition: width .2s linear; }
+.asr-progress-text { font: 400 10px/1 system-ui, sans-serif; color: var(--text2); text-align: center; }
+/* 备用下载链接折叠区块 */
+.asr-alt-toggle { background: none; border: none; padding: 4px 0; cursor: pointer; font: 400 11px/1 system-ui, sans-serif; color: var(--text2); }
+.asr-alt-toggle:hover { color: var(--accent); }
+.asr-alt-links { display: none; flex-direction: column; gap: 6px; margin: 4px 0 0; }
+.asr-alt-links.open { display: flex; }
 .export-select {
   background: var(--surface-input); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px;
@@ -674,6 +687,10 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
 
   <!-- —— B1. Bento 卡「识别」：音频来源 + 流式标点 + 端点滑杆 + 模型信息 —— -->
   <div class="card">
+    <button type="button" id="btnReselectModel" class="icon-btn" hidden style="margin-bottom:6px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      <span id="reselectModelLabel">重新选择识别模型</span>
+    </button>
     <span class="section-label" id="audioSource">音频来源</span>
     <div class="select-wrap">
       <select id="selSource" aria-label="audio source">
@@ -1033,18 +1050,31 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
       </button>
     </div>
     <p class="subpanel-hint" id="asrModelHint"></p>
-    <p class="subpanel-hint" style="display:flex;flex-direction:column;gap:6px;">
+    <!-- 主操作：一键下载到 IndexedDB -->
+    <button type="button" id="btnAsrModelDownload" class="icon-btn" style="width:100%;justify-content:center;gap:6px;margin:4px 0 2px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span id="asrModelDownloadLabel">一键下载模型</span>
+    </button>
+    <!-- 进度条 -->
+    <div class="asr-progress-wrap" id="asrProgressWrap" hidden>
+      <div class="asr-progress-bar"><div class="asr-progress-fill" id="asrProgressFill"></div></div>
+      <span class="asr-progress-text" id="asrProgressText">0%</span>
+    </div>
+    <!-- 坑：popup 窗口失焦/关闭会直接杀掉进行中的 fetch，下载中途不会落盘、只能重头再来，
+         必须显式提醒用户保持窗口打开 -->
+    <p class="subpanel-hint" id="asrDlWarn" hidden></p>
+    <!-- 备用方案：手动下载链接 + 手动导入 -->
+    <button type="button" class="asr-alt-toggle" id="asrAltToggle">▼ 备用方案：手动下载后导入</button>
+    <div class="asr-alt-links" id="asrAltLinks">
+      <a id="asrModelLinkModelScope" href="https://modelscope.cn/models/hcz1017/easysub-model/resolve/master/sherpa-onnx-wasm-main-asr.data" target="_blank" rel="noopener"></a>
       <a id="asrModelLinkGithub" href="https://github.com/huchangzhi/easysub/releases" target="_blank" rel="noopener"></a>
       <a id="asrModelLinkGitee" href="https://gitee.com/huchangzhi/easysub-model/releases" target="_blank" rel="noopener"></a>
-      <a id="asrModelLinkModelScope" href="https://modelscope.cn/models/hcz1017/easysub-model/resolve/master/sherpa-onnx-wasm-main-asr.data" target="_blank" rel="noopener"></a>
-    </p>
-    <div class="row subpanel-foot">
-      <span class="model-info" id="asrModelStatus"></span>
-      <button type="button" id="btnAsrModelImport" class="icon-btn" style="margin-left:auto;">
+      <button type="button" id="btnAsrModelImport" class="icon-btn" style="width:100%;justify-content:center;gap:6px;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
         <span id="asrModelImportLabel">选择已下载的模型文件导入</span>
       </button>
     </div>
+    <span class="model-info" id="asrModelStatus"></span>
     <input type="file" id="asrModelPicker" accept=".data,application/octet-stream" style="display:none;">
   </div>
 
