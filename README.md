@@ -6,6 +6,9 @@
 
 免费、安全的基于本地模型的实时字幕浏览器扩展。
 
+[目前已上架微软插件市场](https://microsoftedge.microsoft.com/addons/detail/elphdofjlfpccfkcfaamkodcniemecao)
+
+
 ## 简介
 
 易字幕 是一款完全离线的浏览器扩展，无需注册、无需联网、无需上传任何数据。通过 WASM 在本地运行语音识别模型，在浏览任意网页时实时生成字幕。
