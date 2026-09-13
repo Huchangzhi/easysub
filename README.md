@@ -140,3 +140,7 @@ Offscreen 主线程 ──→ ASR 解码 ──→ 文本
 ## 许可证
 
 MIT License © 2026 hcz1017
+
+## Star 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Huchangzhi/easysub&type=Date)](https://star-history.com/#Huchangzhi/easysub&Date)
