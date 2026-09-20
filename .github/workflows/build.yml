@@ -92,9 +92,48 @@ jobs:
           name: extension-lite-v${{ github.event.inputs.version }}
           path: dist/
 
+  build-firefox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Download sherpa-onnx WASM
+        run: |
+          TMPDIR=$(mktemp -d)
+          curl -sL \
+            "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
+            | tar xj -C "$TMPDIR"
+          mkdir -p public/wasm
+          find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
+          rm -rf "$TMPDIR"
+          git restore public/wasm/sherpa-onnx-asr.js public/wasm/sherpa-onnx-punctuation.js
+          rm -f public/wasm/index.html public/wasm/app-asr.js
+          ls -lh public/wasm/
+
+      - name: Set release version
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
+        run: |
+          V=${{ github.event.inputs.version }}
+          sed -i "s/开发版本/v$V/g" src/popup.html src/i18n.ts
+          sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" package.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" manifest.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" manifest.firefox.json
+
+      - run: npm run build:firefox
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-firefox${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' && format('-v{0}', github.event.inputs.version) || '' }}
+          path: dist-firefox/
+
   release:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
-    needs: [build, build-lite]
+    needs: [build, build-lite, build-firefox]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -122,6 +161,16 @@ jobs:
         run: |
           cd dist-lite
           zip -r ../easysub-v${{ github.event.inputs.version }}-lite.zip .
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-firefox-v${{ github.event.inputs.version }}
+          path: dist-firefox
+
+      - name: Package extension (firefox)
+        run: |
+          cd dist-firefox
+          zip -r ../easysub-v${{ github.event.inputs.version }}-firefox.zip .
 
       - name: Package translation models
         run: |
@@ -171,6 +220,12 @@ jobs:
             - 大小: ~150MB
             - 体积更小、速度更快，适合资源受限的场景
 
+            ### firefox（Firefox 版，含 full 模型）
+            - 与 Chrome 版同一套代码构建（ext-host 层抹平浏览器差异）
+            - 安装：Firefox → about:debugging → 此 Firefox → 临时加载附加组件 → 选择 manifest.json
+            - 差异：标签页模式下启动时捕获当前活动标签页，之后切到任意标签页字幕自动跟随
+            - 正式发布前需在 AMO 完成签名（临时加载仅限本机开发调试）
+
             ### 实时翻译模型（可选，离线，约 216MB）
             启用面板"实时翻译"需要下载此模型包：
             `easysub-translation-models-v${{ github.event.inputs.version }}.zip`
@@ -193,6 +248,7 @@ jobs:
             easysub-v${{ github.event.inputs.version }}-full.zip
             easysub-v${{ github.event.inputs.version }}-nomodel.zip
             easysub-v${{ github.event.inputs.version }}-lite.zip
+            easysub-v${{ github.event.inputs.version }}-firefox.zip
             easysub-translation-models-v${{ github.event.inputs.version }}.zip
             sherpa-onnx-wasm-main-asr.data
           draft: false

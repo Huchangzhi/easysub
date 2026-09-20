@@ -3,6 +3,7 @@ import { tSync } from './i18n';
 import { addPunctuation } from './punctuator';
 import { resample } from './audio-processor';
 import { getModelFile } from './model-db';
+import { isFirefox } from './ext-host';
 
 // ---- wasm 脚本动态注入（nomodel 版支持）----
 // offscreen.html 只静态加载 preload.js（仅定义 Module 不拉资源）。三个 wasm 脚本必须等
@@ -398,6 +399,78 @@ async function startAudioCapture(streamId: string) {
   await pipeCaptureStream(stream, 'tab');
 }
 
+// Firefox 专用捕获面板：FF 无 tab 音频捕获 API（bug 1541425），getDisplayMedia 也静默忽略
+// audio 约束（同一 bug，永远无音频轨），唯一可行的是「音频输入设备」回环——Linux 原生暴露
+// 扬声器 Monitor 输入、Windows 有立体声混音/虚拟声卡时，可由 getUserMedia 直接抓系统音频，
+// 零安装。要求"页面可见 + 用户点击"（FF 不随扩展消息传递 transient activation，
+// bug 1753502），offscreen.html 在 FF 下由可见小窗承载；Chrome 的 offscreen 文档有
+// USER_MEDIA 激活，直接走 startSystemAudioCapture 自动弹屏幕选择器，不走此处。
+function showFirefoxCapturePanel() {
+  const panel = document.getElementById('ffCapturePanel');
+  const status = document.getElementById('ffCapStatus');
+  const btn = document.getElementById('btnPickAudio') as HTMLButtonElement | null;
+  const select = document.getElementById('ffInputSelect') as HTMLSelectElement | null;
+  if (!panel || !btn) return;
+  const b = btn;
+  panel.hidden = false;
+  let ready = false;
+
+  // 第一步（必须在 onClick 的用户手势里）：先要权限让 enumerateDevices 返回真实标签，
+  // 再列出所有 audioinput——Linux 的 "Monitor of <设备>" 正是扬声器回环（系统音频）。
+  async function listInputDevices() {
+    b.disabled = true;
+    if (status) status.textContent = '正在请求麦克风权限…';
+    try {
+      const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+      probe.getTracks().forEach((t) => t.stop());
+      const inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+      if (!select) return;
+      if (inputs.length === 0) throw new Error('没有可用的音频输入设备');
+      select.innerHTML = '';
+      inputs.forEach((d, i) => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        opt.textContent = d.label || `音频输入 ${i + 1}`;
+        select.appendChild(opt);
+      });
+      select.hidden = false;
+      b.textContent = '开始识别';
+      ready = true;
+      if (status) status.textContent = '已连接。选择这里的「扬声器 Monitor」即可转录整机声音，识别期间请保持本窗口开启。';
+    } catch (e: any) {
+      b.disabled = false;
+      const denied = e?.name === 'NotAllowedError' || e?.name === 'AbortError';
+      if (status) status.textContent = denied ? '麦克风权限被拒绝，无法读取音频输入。' : (e?.message || String(e));
+    }
+  }
+
+  b.onclick = () => {
+    if (!ready) { listInputDevices(); return; }
+    // 第二步：用选中的 deviceId 重开流。数字回环必须关 AEC/NS/AGC，否则 Firefox
+    // 会把系统声音当环境噪声滤掉（转出来只剩静音）。
+    const deviceId = select?.value;
+    b.disabled = true;
+    if (status) status.textContent = '正在开始识别…';
+    navigator.mediaDevices.getUserMedia({
+      audio: {
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    })
+      .then(async (stream) => {
+        await pipeCaptureStream(stream, 'system');
+        panel.hidden = true;
+        log('Firefox 音频输入捕获已开始');
+      })
+      .catch((e: any) => {
+        b.disabled = false;
+        if (status) status.textContent = e?.message || String(e);
+      });
+  };
+}
+
 // 系统音频（整机环回）：MV3 的 desktopCapture 两条路都被 Chrome 堵死——SW 里调用
 // 强制要求 targetTab（crbug 41493089），其 streamId 又官方确认无法在 offscreen 文档
 // 消费（crbug 326509126）。唯一可行组合就是 offscreen 文档内直接 getDisplayMedia：
@@ -407,7 +480,13 @@ async function startSystemAudioCapture() {
   // 只要音频轨；视频轨停掉——系统环回音频独立于屏幕画面，停视频不影响。
   media.getVideoTracks().forEach((t) => t.stop());
   const audio = media.getAudioTracks()[0];
-  if (!audio) throw new Error('未获取到系统音频轨道');
+  if (!audio) {
+    // Chrome 常见：选完源但没勾（或该源不支持）「分享系统音频」，流里没有音频轨。
+    // 标记 NO_AUDIO_TRACK，调用方据此转可重试提示而不是致命收场。
+    const e: any = new Error('未获取到音频轨道，需勾选「分享系统音频」');
+    e.code = 'NO_AUDIO_TRACK';
+    throw e;
+  }
   await pipeCaptureStream(new MediaStream([audio]), 'system');
 }
 
@@ -685,8 +764,13 @@ function setupPort() {
         // 向 background 要一个全新的 streamId 并立即开流。旧实现"启动时预签发、
         // 模型加载完才消费"，时间窗一长就会报 "Error starting tab capture"。
         // system 模式没有 streamId 可用（desktopCapture 无法跨进 offscreen，见
-        // startSystemAudioCapture 注释）：就绪后直接弹 getDisplayMedia 选择器。
+        // startSystemAudioCapture 注释）：Chrome 就绪后直接弹 getDisplayMedia 选择器；
+        // Firefox 需要可见页面+用户点击（见 showFirefoxCapturePanel），展示捕获面板等待点击。
         if (reconnectSource === 'system') {
+          if (isFirefox) {
+            showFirefoxCapturePanel();
+            return;
+          }
           startSystemAudioCapture().catch((e: any) => {
             log('系统音频捕获失败或已取消: ' + (e?.message || e));
             // 用户关掉选择器：NotAllowedError/AbortError 都算主动取消，报统一文案
@@ -731,10 +815,11 @@ function setupPort() {
     }
 
     if (msg.type === 'STREAM_READY') {
-      // background 对 REQUEST_STREAM 的应答：拿到新鲜 streamId，立即开流。
-      // 仅 tab 模式会收到（system 模式走 startSystemAudioCapture，无此消息）。
-      if (!pipeline) { log('STREAM_READY 到达时会话已停止，丢弃'); return; }
-      log('收到 STREAM_READY，开始音频捕获');
+      // STREAM_READY：background 对 REQUEST_STREAM 的应答，拿到新鲜 streamId 立即开流。
+      // 仅 Chrome tab 模式会收到（system 模式走 startSystemAudioCapture；
+      // Firefox 是纯系统音频模式，无 streamId 路径）。
+      if (!pipeline) { log(`${msg.type} 到达时会话已停止，丢弃`); return; }
+      log(`收到 ${msg.type}，开始音频捕获`);
       reconnectStreamId = msg.streamId || null;
       (async () => {
         await startAudioCapture(msg.streamId);

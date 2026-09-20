@@ -5,7 +5,9 @@
   "scripts": {
     "download-wasm": "pwsh -ExecutionPolicy Bypass -File scripts/download-wasm.ps1",
     "build": "webpack --mode production",
-    "dev": "webpack --mode development --watch"
+    "build:firefox": "webpack --mode production --env browser=firefox && node scripts/patch-ff-thread-mode.mjs dist-firefox",
+    "dev": "webpack --mode development --watch",
+    "dev:firefox": "webpack --mode development --watch --env browser=firefox"
   },
   "devDependencies": {
     "@types/chrome": "^0.2.2",

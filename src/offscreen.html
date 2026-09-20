@@ -13,5 +13,29 @@
        查完 IndexedDB（nomodel 版需先把模型转成 blob URL 供 locateFile 使用）后按序动态注入，
        静态写在这里会抢在 blob URL 就绪前求值，加载器会立刻 fetch 一个不存在的扩展内 .data -->
   <script src="wasm/preload.js"></script>
+
+  <!-- Firefox 捕获面板：FF 无 tab 捕获 API，getDisplayMedia 又不带音频轨（bug 1541425），
+       唯一可用路径是「音频输入设备」——Linux 上原生暴露扬声器 Monitor 回环、Windows 靠
+       立体声混音/虚拟声卡，均可经 getUserMedia 零安装拿到系统音频。本页在 FF 下由可见小窗
+       承载（transient activation 需要页面可见 + 用户点击），Chrome 的 offscreen 文档跳过。 -->
+  <div id="ffCapturePanel" hidden>
+    <div class="ff-cap-title">易字幕 · 选择音频输入</div>
+    <div class="ff-cap-note">Firefox 不能直接捕获标签页/系统声音，请读取麦克风输入：装有「扬声器 Monitor 回环」（Linux 原生自带）或「立体声混音」等虚拟输入设备的，系统声音可直接进来。识别期间请保持本窗口开启。</div>
+    <button id="btnPickAudio" type="button">请求麦克风权限并列出设备</button>
+    <select id="ffInputSelect" hidden></select>
+    <div id="ffCapStatus" class="ff-cap-status"></div>
+  </div>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #1c1c22; color: #e8e8f0; margin: 0; }
+    #ffCapturePanel { padding: 16px; text-align: center; }
+    .ff-cap-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+    .ff-cap-note { font-size: 12px; line-height: 1.6; opacity: .75; margin-bottom: 12px; text-align: left; }
+    #btnPickAudio { width: 100%; padding: 10px 0; font-size: 14px; font-weight: 600; border: 0; border-radius: 8px;
+      background: #4f7cff; color: #fff; cursor: pointer; }
+    #btnPickAudio:disabled { opacity: .5; cursor: default; }
+    #ffInputSelect { width: 100%; margin-top: 10px; padding: 6px; font-size: 13px; border-radius: 6px;
+      background: #28282f; color: #e8e8f0; border: 1px solid #3a3a44; }
+    .ff-cap-status { font-size: 12px; margin-top: 10px; min-height: 16px; opacity: .8; }
+  </style>
 </body>
 </html>

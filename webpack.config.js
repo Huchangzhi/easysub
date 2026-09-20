@@ -3,7 +3,10 @@ const webpack = require('webpack');
 const CopyPlugin = require('copy-webpack-plugin');
 const HtmlPlugin = require('html-webpack-plugin');
 
-module.exports = {
+module.exports = (env = {}) => {
+  const browser = env.browser === 'firefox' ? 'firefox' : 'chrome';
+  const distDir = browser === 'firefox' ? 'dist-firefox' : 'dist';
+  return {
   entry: {
     background: './src/background.ts',
     content: './src/content.ts',
@@ -29,7 +32,7 @@ module.exports = {
     },
   },
   output: {
-    path: path.resolve(__dirname, 'dist'),
+    path: path.resolve(__dirname, distDir),
     filename: '[name].js',
     clean: true,
   },
@@ -37,7 +40,7 @@ module.exports = {
     new CopyPlugin({
       patterns: [
         { from: 'public', to: '.' },
-        { from: 'manifest.json', to: '.' },
+        { from: `manifest.${browser}.json`, to: 'manifest.json' },
         { from: '_locales', to: '_locales' },
         // 离线翻译运行时：onnxruntime-web 的 wasm 二进制 + 对应的 .mjs 包装（onnxruntime
         // 会动态 import `ort-wasm/ort-wasm-simd-threaded.jsep.mjs` 等文件，只拷 .wasm 会
@@ -81,4 +84,5 @@ module.exports = {
       test: /translation-worker/,
     }),
   ],
+  };
 };

@@ -1,5 +1,6 @@
 import { getLang, setLang, tSync } from './i18n';
 import { listModelKeys, saveModelFile, saveModelBlob, getModelFile, deleteModelKeys } from './model-db';
+import { isFirefox } from './ext-host';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -206,10 +207,16 @@ async function applyLang() {
 async function loadPrefs() {
   const r = await chrome.storage.local.get(PREFS_KEY);
   const prefs: Record<string, any> = r[PREFS_KEY] || {};
-  // 音源恢复：仅支持平台才接受 system；不支持平台禁用系统音频选项并强制回 tab
+  // 音源恢复：仅支持平台才接受 system；不支持平台禁用系统音频选项并强制回 tab。
+  // Firefox 无 tab 音频捕获，唯一可用是 system，整个下拉禁用。
   const optSystem = selSource.querySelector<HTMLOptionElement>('option[value="system"]');
   if (optSystem && !SYSTEM_AUDIO_SUPPORTED) optSystem.disabled = true;
-  selSource.value = SYSTEM_AUDIO_SUPPORTED && prefs.audioSource === 'system' ? 'system' : 'tab';
+  if (isFirefox) {
+    selSource.value = 'system';
+    selSource.disabled = true;
+  } else {
+    selSource.value = SYSTEM_AUDIO_SUPPORTED && prefs.audioSource === 'system' ? 'system' : 'tab';
+  }
   updateSourceHint();
   if (prefs.fontSize) {
     fontSizeSlider.value = String(prefs.fontSize);
@@ -274,8 +281,14 @@ function savePrefs(partial: Record<string, any>) {
   });
 }
 
-// 音源提示随当前选择刷新：仅 system 时展示（支持平台给操作指引，不支持平台给禁用原因）
+// 音源提示随当前选择刷新：system 展示操作指引/禁用原因；Firefox 无 tab 音频捕获
+// （bug 1541425）只有系统音频，下拉锁定在 system 并提示操作步骤
 function updateSourceHint() {
+  if (isFirefox) {
+    sourceHintEl.textContent = tSync(currentLang, 'sourceHintFirefox');
+    sourceHintEl.hidden = false;
+    return;
+  }
   if (selSource.value !== 'system') {
     sourceHintEl.hidden = true;
     sourceHintEl.textContent = '';
@@ -699,7 +712,7 @@ selSource.onchange = () => {
 btnStart.onclick = async () => {
   // nomodel 版门卫：包内无 .data 且未导入过 → 弹窗中窗引导，导入成功自动继续本次启动
   if (!(await ensureAsrModel())) return;
-  const source: 'tab' | 'system' = selSource.value === 'system' && SYSTEM_AUDIO_SUPPORTED ? 'system' : 'tab';
+  const source: 'tab' | 'system' = isFirefox || (selSource.value === 'system' && SYSTEM_AUDIO_SUPPORTED) ? 'system' : 'tab';
   // 系统音频模式不依赖活动标签页（captureTabId 恒 null，字幕走悬浮窗），跳过 noActiveTab 检查
   if (source === 'system') {
     chrome.runtime.sendMessage({

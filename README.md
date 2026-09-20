@@ -49,12 +49,32 @@ npm run build
 
 然后 Chrome → 扩展程序 → 加载已解压的扩展 → 选择 `dist/` 目录。
 
+### Firefox 版
+
+```bash
+npm run build:firefox
+```
+
+然后 Firefox → `about:debugging` → 此 Firefox → 临时加载附加组件 → 选择 `dist-firefox/manifest.json`。
+
+> Firefox 使用同一份源码（`src/ext-host.ts` 抹平浏览器差异），但有平台限制：
+> - **无标签页捕获，系统音频走「音频输入设备」回环**：Firefox 桌面版既无 tabCapture，`getDisplayMedia`
+>   也静默忽略 `audio` 约束（[bug 1541425](https://bugzilla.mozilla.org/show_bug.cgi?id=1541425)，永远无音频轨）。
+>   因此 `build:firefox` 跳过 tab 模式，offscreen 载荷改为一个**可见小窗**：点按钮授权麦克风后列出全部
+>   音频输入，选择「扬声器 Monitor」（Linux 的 PulseAudio/PipeWire 原生自带，零安装；Windows 需声卡有
+>   立体声混音/虚拟声卡）即可转录整机声音；识别期间需保持该窗口开启
+> - **wasm 单线程运行**：pthread 构建的 sherpa-onnx 启动即向 worker 传输共享 `WebAssembly.Memory`，
+>   Firefox 扩展页非 crossOriginIsolated 必失败。`build:firefox` 通过
+>   `scripts/patch-ff-thread-mode.mjs` 把预热池置 0（零重编译，主线程单线程推理）。
+>   若未来 sherpa 恢复多线程，此路失效，需换单线程 wasm 构建
+> - 正式发布需在 AMO 签名后上架；临时加载仅限本机调试
+
 ## 技术栈
 
 - **识别引擎**: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/) WASM 离线推理
 - **模型**: Zipformer 中英双语 — [full] 全量版 (fp32, 357MB) / [lite] 轻量版 (int8, 150MB)
 - **标点恢复**: CT-Transformer INT8 + 规则回退（流式非阻塞，句完成调模型）
-- **架构**: Chrome Extension Manifest V3
+- **架构**: Chrome Extension Manifest V3（Firefox 同源码构建，见 `manifest.firefox.json`）
 
 ## 架构
 

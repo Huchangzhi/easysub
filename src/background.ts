@@ -1,4 +1,5 @@
 import { t } from './i18n';
+import { isFirefox, ensureOffscreenHost, hasOffscreenHost, closeOffscreenHost } from './ext-host';
 const PENDING_KEY = 'pendingInit';
 // 坑：会话核心状态全是下面的 SW 内存全局变量，service worker 空闲约 30 秒即被杀、全部归零。
 // 不在 storage.session 里留一份跨重启快照的话，"SW 已死期间用户关掉了被捕获标签页"
@@ -154,14 +155,8 @@ function appendTranscript(text: string, ts: number = Date.now()) {
 }
 
 async function ensureOffscreen() {
-  const exists = await chrome.offscreen.hasDocument();
-  if (exists) return;
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html',
-    // DISPLAY_MEDIA：system 模式在文档内直接 getDisplayMedia（桌面采集+系统音频）
-    reasons: ['USER_MEDIA', 'DISPLAY_MEDIA'] as any,
-    justification: 'Speech recognition audio processing',
-  });
+  // Chrome 走 chrome.offscreen API；Firefox 用后台事件页内隐藏 iframe 承载 offscreen.html
+  await ensureOffscreenHost();
 }
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -189,7 +184,7 @@ chrome.runtime.onConnect.addListener((port) => {
       if (cb) cb({ ok: p.ok, text: p.text, error: p.error, debug: p.debug });
       // 测试是临时拉的 offscreen：若当前无识别会话，出结果后立即关闭文档（连带回收翻译 worker）
       if (pipelineStatus !== 'Running') {
-        chrome.offscreen.closeDocument().catch(() => {});
+        closeOffscreenHost().catch(() => {});
       }
       return;
     }
@@ -241,7 +236,7 @@ chrome.runtime.onConnect.addListener((port) => {
         // 仅 tab 模式会出现（system 模式由 offscreen 直接 getDisplayMedia）
         handleRequestStream(msg.payload.tabId);
       }
-      if (msg.payload?.type === 'RECONNECT') {
+if (msg.payload?.type === 'RECONNECT') {
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         console.log('[TM BG] offscreen 重连, status=', msg.payload.status, 'tabId=', msg.payload.tabId);
         pipelineStatus = msg.payload.status;
@@ -346,6 +341,8 @@ async function checkPendingInit(port: chrome.runtime.Port) {
 // 仅 tab 模式有这个往返（system 模式由 offscreen 内 getDisplayMedia 直接开流，无 streamId）。
 async function handleRequestStream(tabId: number | null) {
   try {
+    // 仅 Chrome：targetTabId 签发 streamId 由 offscreen 消费。
+    // Firefox 无 tab 捕获，只有系统音频模式（offscreen 窗口内 getDisplayMedia），不走这里。
     // 坑：本 SW 可能刚被这条消息唤醒、内存态全空，所以优先用 offscreen 随消息带来的
     // tabId（它记的是 INIT 时的目标页），绝不能依赖 captureTabId/pipelineStatus 做守卫。
     const target = tabId ?? captureTabId;
@@ -387,7 +384,7 @@ function cleanupAll() {
   // 但 closeDocument 是无条件执行的——offscreen 文档销毁后 AudioWorklet、60ms flush
   // 定时器、pipeline 全部随之消亡，这是"停止"最终一定生效的硬保证。
   // STOP_OFFSCREEN 只是端口还活着时的优雅停机快路径，二者缺一不可。
-  chrome.offscreen.closeDocument().catch(() => {});
+  closeOffscreenHost().catch(() => {});
   offscreenPort = null;
   captureTabId = null;
   // 重试一次，防止 content script 未就绪
@@ -473,12 +470,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       // 否则就是"用户已停止但采集继续"的幽灵会话。
       const myEpoch = ++sessionEpoch;
       const stale = () => myEpoch !== sessionEpoch;
-      await chrome.offscreen.closeDocument().catch(() => {});
+      await closeOffscreenHost().catch(() => {});
       if (stale()) { sendResponse({}); return; }
       // closeDocument 会触发 onDisconnect 置空 offscreenPort
       // 等旧文档真正消失（上限 1.5s）再继续，给 Chrome 时间异步释放旧 capture 流
       const releaseDeadline = Date.now() + 1500;
-      while (await chrome.offscreen.hasDocument()) {
+      while (await hasOffscreenHost()) {
         if (Date.now() > releaseDeadline) break; // 极端情况下放行，让后续错误正常暴露
         await new Promise(r => setTimeout(r, 50));
         if (stale()) { sendResponse({}); return; }
@@ -487,8 +484,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (stale()) { sendResponse({}); return; }
 
       pipelineStatus = 'Running';
-      // 音频来源：system 模式无目标标签页（captureTabId 恒 null），跳过字幕层注入等 tab 逻辑
-      const source: 'tab' | 'system' = msg.source === 'system' ? 'system' : 'tab';
+      // 音频来源：system 模式无目标标签页（captureTabId 恒 null），跳过字幕层注入等 tab 逻辑。
+      // Firefox 平台无 tab 音频捕获 API（bug 1541425），一律强制 system 模式。
+      const source: 'tab' | 'system' = isFirefox ? 'system' : (msg.source === 'system' ? 'system' : 'tab');
       sessionSource = source;
       captureTabId = source === 'system' ? null : (msg.tabId || null);
       sessionStartedAt = Date.now(); // START 成功即盖会话开始戳，计时基准唯一事实源
@@ -689,20 +687,22 @@ chrome.windows.onRemoved.addListener((closedWinId) => {
   }
 });
 
+// 目标标签页重注入字幕层：PING 探测避免叠加多层，随后按当前prefs补字号并让 offscreen
+// 重发当前句。被 tabs.onUpdated（导航完成）与 Firefox 自动跟随共用。
+async function injectOverlayInto(tabId: number) {
+  const already = await isContentScriptInjected(tabId);
+  if (!already) {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] }).catch(() => {});
+  }
+  sendToTab(tabId, { type: 'OVERLAY_TOGGLE', visible: true });
+  chrome.storage.local.get('tmspeech_prefs').then(r => {
+    const prefs = (r['tmspeech_prefs'] as any) || {};
+    if (prefs.fontSize) sendToTab(tabId, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
+  });
+  if (offscreenPort) offscreenPort.postMessage({ type: 'RESEND_CURRENT_TEXT' });
+}
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (tabId !== captureTabId || changeInfo.status !== 'complete' || pipelineStatus !== 'Running') return;
-  setTimeout(async () => {
-    // 坑：executeScript 每次都会注入一份全新的 content.js 副本，而每份副本都会创建
-    // 自己的字幕层——不加探测就直接注入，导航几次就叠几层悬浮字幕。先 PING 再注入。
-    const already = await isContentScriptInjected(tabId);
-    if (!already) {
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] }).catch(() => {});
-    }
-    sendToTab(tabId, { type: 'OVERLAY_TOGGLE', visible: true });
-    chrome.storage.local.get('tmspeech_prefs').then(r => {
-      const prefs = (r['tmspeech_prefs'] as any) || {};
-      if (prefs.fontSize) sendToTab(tabId, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
-    });
-    if (offscreenPort) offscreenPort.postMessage({ type: 'RESEND_CURRENT_TEXT' });
-  }, 300);
+  setTimeout(() => { injectOverlayInto(tabId); }, 300);
 });
