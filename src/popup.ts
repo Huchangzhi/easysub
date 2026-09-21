@@ -109,6 +109,8 @@ async function applyLang() {
   $('optSourceMic').textContent = tr('sourceMic');
   $('sourceTip').textContent = tr('sourceOutsideTip');
   updateSourceHint();
+  // 模态开着时切语言：卡片文案同步刷新（见 fillUnsupportedModalText 注释）
+  if (!unsupModal.hidden) fillUnsupportedModalText();
   $('showSubtitles').textContent = tr('showSubtitles');
   $('fontLabel').textContent = tr('font');
   $('modelInfo').textContent = tr('modelInfo');
@@ -712,11 +714,17 @@ function log(msg: string) {
 // 来不及看（早期版本就是这么写，等于没有反馈）。模态层需要用户动手关掉，能把
 // 原因和下一步顶到眼前，且不引入 notifications 权限。
 // 「改用麦克风」按钮直接把音源切过去并存盘，用户读到原因的同时就能完成修正。
-function showUnsupportedModal() {
+// 文案填充单独成函数：模态开着时用户切语言（applyLang 重跑）也要跟着刷新，
+// 否则卡片停在旧语言，与周围刚变过的界面不一致。
+function fillUnsupportedModalText() {
   unsupTitle.textContent = tSync(currentLang, 'notifUnsupportedTitle');
   unsupBody.textContent = tSync(currentLang, 'notifUnsupportedBody');
   unsupSwitch.textContent = tSync(currentLang, 'unsupSwitchMic');
   unsupClose.textContent = tSync(currentLang, 'unsupGotIt');
+}
+
+function showUnsupportedModal() {
+  fillUnsupportedModalText();
   unsupModal.hidden = false;
   // 焦点给主操作：键盘用户 Tab 一次即可确认，不被遮罩层吞掉焦点
   unsupSwitch.focus();
