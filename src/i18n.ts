@@ -174,12 +174,11 @@ const strings: Record<string, Record<string, string>> = {
     sourceHintSystem: '开始识别后将弹出 Chrome 屏幕选择器：请选择「整个屏幕」并勾选「分享系统音频」（Windows / ChromeOS 全版本支持；macOS 需 Chrome 141+ 与 macOS 14.2+）。',
     sourceHintNoSysAudio: '当前设备不支持系统音频捕获（仅 Windows / ChromeOS / 新版 macOS 支持）。请改用「麦克风」来识别外放的声音。',
     sysAudioUnsupported: '当前设备不支持系统音频捕获，识别未开始。请把音频来源改为「麦克风」。',
-    // —— 不支持平台点击「开始」时的浏览器级通知（popup 会随点击关闭，行内提示看不到）——
+    // —— 不支持平台点击「开始」时的窗内模态提示（popup 会随点击关闭，行内小字看不到）——
     notifUnsupportedTitle: '无法使用系统音频',
-    notifUnsupportedBody: '当前设备不支持系统音频捕获，识别未开始。请在扩展面板把音频来源改为「麦克风」后重试。',
-    // 权限被拒时的兜底：纯面板内提示很可能随 popup 关闭一起消失，通知至少留个痕迹
-    notifUnsupportedTitlePlain: '系统音频不可用',
-    notifUnsupportedBodyPlain: '当前设备不支持系统音频捕获，识别未开始。请打开扩展面板，把音频来源改为「麦克风」。',
+    notifUnsupportedBody: '当前设备不支持系统音频捕获（仅 Windows / ChromeOS / 新版 macOS 支持），识别未开始。',
+    unsupSwitchMic: '改用麦克风',
+    unsupGotIt: '我知道了',
     pickerCancelled: '已取消屏幕选择，识别未开始',
     sourceOutsideTip: '想在浏览器之外的软件上用字幕？试试改一下音频来源',
     // —— 麦克风音源（采集在悬浮字幕窗内，PCM 经 bg 转发给 offscreen）——
@@ -351,9 +350,9 @@ const strings: Record<string, Record<string, string>> = {
     sourceHintNoSysAudio: 'System audio capture is not supported on this device (Windows / ChromeOS / recent macOS only). Switch to "Microphone" to transcribe audio from your speakers.',
     sysAudioUnsupported: 'System audio capture is not supported on this device — recognition not started. Please switch the audio source to "Microphone".',
     notifUnsupportedTitle: 'System audio unavailable',
-    notifUnsupportedBody: 'System audio capture is not supported on this device — recognition did not start. Open the extension panel and switch the audio source to "Microphone", then try again.',
-    notifUnsupportedTitlePlain: 'System audio unavailable',
-    notifUnsupportedBodyPlain: 'System audio capture is not supported on this device — recognition did not start. Open the extension panel and switch the audio source to "Microphone".',
+    notifUnsupportedBody: 'System audio capture is not supported on this device (Windows / ChromeOS / recent macOS only) — recognition did not start.',
+    unsupSwitchMic: 'Use microphone',
+    unsupGotIt: 'Got it',
     pickerCancelled: 'Screen picking cancelled — recognition not started',
     sourceOutsideTip: 'Want subtitles in apps outside the browser? Try switching the audio source.',
     // —— Microphone source (captured in the floating window, PCM relayed via bg to offscreen) ——

@@ -611,6 +611,43 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
 .asr-progress-bar { width: 100%; height: 6px; border-radius: 3px; background: var(--surface-input); overflow: hidden; }
 .asr-progress-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--accent); transition: width .2s linear; }
 .asr-progress-text { font: 400 10px/1 system-ui, sans-serif; color: var(--text2); text-align: center; }
+
+/* —— 系统音频不支持·模态提示 ——
+   与 .subpanel 的区别：subpanel 是用户主动打开、有明确关闭按钮的功能面板；
+   这里是点击「启动」后被动弹出的阻断式提示，用遮罩层把底层 UI 一并压暗，
+   强制用户读到原因并做出选择（改音源 / 我知道了）。 */
+.unsup-mask {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 14px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+}
+.unsup-mask[hidden] { display: none; }
+body[data-mode="light"] .unsup-mask { background: rgba(15, 18, 24, 0.42); }
+.unsup-card {
+  width: 100%; max-width: 320px;
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 13px;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+}
+body[data-mode="light"] .unsup-card { box-shadow: 0 14px 36px rgba(0, 0, 0, 0.2); }
+.unsup-head { display: flex; align-items: center; gap: 7px; font: 600 12.5px/1.3 system-ui, sans-serif; color: var(--text); }
+/* 警示图标用琥珀色而非 accent：accent 随主题变色（可能是青/紫），承载不了「警告」语义 */
+.unsup-icon { width: 17px; height: 17px; flex: none; color: #f0a020; }
+.unsup-body { font-size: 11.5px; color: var(--text2); line-height: 1.6; margin: 0; }
+.unsup-actions { display: flex; gap: 6px; margin-top: 2px; }
+.unsup-btn {
+  flex: 1 1 0; min-width: 0;
+  padding: 6px 8px; border-radius: 7px; cursor: pointer;
+  font: 500 11.5px/1.2 system-ui, sans-serif;
+  background: var(--surface-input); color: var(--text);
+  border: 1px solid var(--border);
+}
+.unsup-btn:hover { border-color: var(--accent); }
+.unsup-btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+.unsup-btn.primary:hover { filter: brightness(1.08); }
 /* 备用下载链接折叠区块 */
 .asr-alt-toggle { background: none; border: none; padding: 4px 0; cursor: pointer; font: 400 11px/1 system-ui, sans-serif; color: var(--text2); }
 .asr-alt-toggle:hover { color: var(--accent); }
@@ -1078,6 +1115,22 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
     </div>
     <span class="model-info" id="asrModelStatus"></span>
     <input type="file" id="asrModelPicker" accept=".data,application/octet-stream" style="display:none;">
+  </div>
+
+  <!-- 系统音频不支持·窗中窗：popup 会随点「启动」关闭，行内小字用户看不到，
+       必须用一个需要用户动手关闭的模态层把原因顶到眼前（不引入 notifications 权限） -->
+  <div class="unsup-mask" id="unsupModal" hidden>
+    <div class="unsup-card" role="alertdialog" aria-modal="true" aria-labelledby="unsupTitle">
+      <div class="unsup-head">
+        <svg class="unsup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span id="unsupTitle"></span>
+      </div>
+      <p class="unsup-body" id="unsupBody"></p>
+      <div class="unsup-actions">
+        <button type="button" class="unsup-btn primary" id="unsupSwitch"></button>
+        <button type="button" class="unsup-btn" id="unsupClose"></button>
+      </div>
+    </div>
   </div>
 
   <div class="disclaimer" id="disclaimer">字幕由模型识别，不保证准确</div>

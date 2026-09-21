@@ -9,6 +9,12 @@ const btnStop = $('btnStop') as HTMLButtonElement;
 // —— 音频来源（tab=当前标签页 / system=系统音频 / mic=麦克风）——
 const selSource = $('selSource') as HTMLSelectElement;
 const sourceHintEl = $('sourceHint');
+// —— 系统音频不支持·模态提示 ——
+const unsupModal = $('unsupModal') as HTMLDivElement;
+const unsupTitle = $('unsupTitle');
+const unsupBody = $('unsupBody');
+const unsupSwitch = $('unsupSwitch') as HTMLButtonElement;
+const unsupClose = $('unsupClose') as HTMLButtonElement;
 // 坑：系统音频捕获的支持范围随平台差异很大——getDisplayMedia 选择器的「分享系统音频」
 // 勾选项：Windows/ChromeOS 全版本支持；macOS 自 Chrome 141（且 macOS 14.2+）起支持；
 // Linux/安卓一律不支持（Linux 的 Chromium 明确拒绝采集系统音频）。
@@ -701,58 +707,43 @@ function log(msg: string) {
   modelStatus.textContent = msg;
 }
 
-// —— 浏览器级通知：仅在「popup 即将关闭、行内提示必然看不到」的场景使用 ——
-// 坑：chrome.notifications 需要 notifications 权限，且必须传 iconUrl（否则整条静默丢弃）；
-// 权限若被用户拒绝会抛错，这里降级为面板内提示兜底，绝不吞掉反馈。
-function notifyUnsupported() {
-  // popup 已关：写 modelStatus 是往看不见的地方写字（DOM 仍可写、不报错），
-  // 改发一条无操作按钮的普通通知保底，用户总能看见一次。
-  const fallback = () => {
-    if (!popupAlive) {
-      try {
-        chrome.notifications.create('easysub-unsupported-fb-' + Date.now(), {
-          type: 'basic',
-          iconUrl: 'icons/icon128.png',
-          title: tSync(currentLang, 'notifUnsupportedTitlePlain'),
-          message: tSync(currentLang, 'notifUnsupportedBodyPlain'),
-        });
-      } catch { /* 通知能力彻底不可用：无更多可降级手段 */ }
-      return;
-    }
-    log(tSync(currentLang, 'sysAudioUnsupported'));
-  };
-  // 类型：create 要求 title/type/message/iconUrl 四项必填，显式标注省去断言
-  const opts: Required<Pick<chrome.notifications.NotificationOptions, 'title' | 'type' | 'message' | 'iconUrl'>> & {
-    priority?: number;
-  } = {
-    type: 'basic',
-    iconUrl: 'icons/icon128.png',
-    title: tSync(currentLang, 'notifUnsupportedTitle'),
-    message: tSync(currentLang, 'notifUnsupportedBody'),
-    priority: 2,
-  };
-  const send = () => chrome.notifications.create('easysub-unsupported-' + Date.now(), opts, () => {
-    // lastError 表示通知没建成（权限被拒等）：此时 popup 可能还开着，补面板提示
-    if (chrome.runtime.lastError) fallback();
-  });
-  try {
-    // getAll 顺带当可用性探针：权限被拒时它同样失败，走 catch 兜底
-    chrome.notifications.getAll(() => {
-      if (chrome.runtime.lastError) { fallback(); return; }
-      send();
-    });
-  } catch {
-    fallback();
-  }
+// —— 系统音频不支持·模态提示 ——
+// 为什么要模态而不是行内小字：点「开始」后 popup 会立刻关闭，行内提示用户根本
+// 来不及看（早期版本就是这么写，等于没有反馈）。模态层需要用户动手关掉，能把
+// 原因和下一步顶到眼前，且不引入 notifications 权限。
+// 「改用麦克风」按钮直接把音源切过去并存盘，用户读到原因的同时就能完成修正。
+function showUnsupportedModal() {
+  unsupTitle.textContent = tSync(currentLang, 'notifUnsupportedTitle');
+  unsupBody.textContent = tSync(currentLang, 'notifUnsupportedBody');
+  unsupSwitch.textContent = tSync(currentLang, 'unsupSwitchMic');
+  unsupClose.textContent = tSync(currentLang, 'unsupGotIt');
+  unsupModal.hidden = false;
+  // 焦点给主操作：键盘用户 Tab 一次即可确认，不被遮罩层吞掉焦点
+  unsupSwitch.focus();
 }
 
-// —— popup 存续期感知 ——
-// 坑：点「开始」后 popup 会关闭。若不支持平台的拦截走到通知之外的任何降级路径
-// （面板内文字），用户是看不到的——而 popup 内的 DOM 在关闭后依然可写、不报错，
-// 属于典型静默失败。这里记下 popup 是否仍然可见，让兜底路径能判断反馈是否有效。
-let popupAlive = true;
-window.addEventListener('pagehide', () => { popupAlive = false; });
-window.addEventListener('beforeunload', () => { popupAlive = false; });
+function hideUnsupportedModal() {
+  unsupModal.hidden = true;
+}
+
+unsupSwitch.onclick = () => {
+  // 切到麦克风并落库：与手动改下拉完全等价（走同一条 savePrefs 串行链）
+  selSource.value = 'mic';
+  savePrefs({ audioSource: 'mic' });
+  updateSourceHint();
+  hideUnsupportedModal();
+};
+
+unsupClose.onclick = hideUnsupportedModal;
+
+// 点遮罩空白处关闭（卡片内部点击不冒泡到此：见下方 stopPropagation 处理）
+unsupModal.onclick = (e) => {
+  if (e.target === unsupModal) hideUnsupportedModal();
+};
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !unsupModal.hidden) hideUnsupportedModal();
+});
 
 function updateLockUI() {
   const tr = (key: string) => tSync(currentLang, key);
@@ -785,9 +776,8 @@ btnStart.onclick = async () => {
     setStatus('Stopped');
     log(tSync(currentLang, 'sysAudioUnsupported'));
     updateSourceHint();
-    // popup 会随这次点击关闭，行内提示用户根本来不及看——补一条浏览器级通知，
-    // 这样脱离 popup 也能看到「为什么没开始」以及该改哪里。
-    notifyUnsupported();
+    // 行内提示会随 popup 关闭一起消失，模态层才是用户真正看得见的那一次反馈
+    showUnsupportedModal();
     return;
   }
   // 系统音频/麦克风模式不依赖活动标签页（captureTabId 恒 null，字幕走悬浮窗），跳过 noActiveTab 检查
