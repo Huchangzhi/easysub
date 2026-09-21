@@ -6,17 +6,26 @@ const $ = (id: string) => document.getElementById(id)!;
 const statusDot = $('statusDot');
 const btnStart = $('btnStart') as HTMLButtonElement;
 const btnStop = $('btnStop') as HTMLButtonElement;
-// —— 音频来源（tab=当前标签页 / system=系统音频，Chrome 桌面选择器授权）——
+// —— 音频来源（tab=当前标签页 / system=系统音频 / mic=麦克风）——
 const selSource = $('selSource') as HTMLSelectElement;
 const sourceHintEl = $('sourceHint');
+// —— 系统音频不支持·模态提示 ——
+const unsupModal = $('unsupModal') as HTMLDivElement;
+const unsupTitle = $('unsupTitle');
+const unsupBody = $('unsupBody');
+const unsupSwitch = $('unsupSwitch') as HTMLButtonElement;
+const unsupClose = $('unsupClose') as HTMLButtonElement;
 // 坑：系统音频捕获的支持范围随平台差异很大——getDisplayMedia 选择器的「分享系统音频」
 // 勾选项：Windows/ChromeOS 全版本支持；macOS 自 Chrome 141（且 macOS 14.2+）起支持；
-// Linux/安卓一律不支持（Linux 的 Chromium 明确拒绝采集系统音频）。其余平台禁用该选项
-// 并展示提示，防止用户选了却无法出声音。
+// Linux/安卓一律不支持（Linux 的 Chromium 明确拒绝采集系统音频）。
+// 设计取舍：不支持平台上【不禁用】该选项——置灰会让用户以为插件坏了却无从得知原因。
+// 改为始终可选，选中后在提示区说明「当前设备不支持」并给出替代建议（改用麦克风）。
 const UA = navigator.userAgent;
 const SYSTEM_AUDIO_SUPPORTED =
   /Windows|CrOS|Chromium OS/i.test(UA) ||
   (/Mac OS X|Macintosh/i.test(UA) && Number(UA.match(/Chrome\/(\d+)/)?.[1] ?? 0) >= 141);
+// 麦克风音源不做设备下拉：首次启动时 Chrome 的授权弹窗自带设备选择，
+// 且浏览器会记住所选设备，后续不指定 deviceId 即沿用——无需在扩展里重复这套 UI。
 const chkOverlay = $('chkOverlay') as HTMLInputElement;
 const chkPunct = $('chkPunct') as HTMLInputElement;
 const chkShowPrev = $('chkShowPrev') as HTMLInputElement;
@@ -97,8 +106,11 @@ async function applyLang() {
   // 此处必须同步删除旧赋值，否则 null.textContent 抛错会中断整个 applyLang
   $('optSourceTab').textContent = tr('sourceTab');
   $('optSourceSystem').textContent = tr('sourceSystem');
+  $('optSourceMic').textContent = tr('sourceMic');
   $('sourceTip').textContent = tr('sourceOutsideTip');
   updateSourceHint();
+  // 模态开着时切语言：卡片文案同步刷新（见 fillUnsupportedModalText 注释）
+  if (!unsupModal.hidden) fillUnsupportedModalText();
   $('showSubtitles').textContent = tr('showSubtitles');
   $('fontLabel').textContent = tr('font');
   $('modelInfo').textContent = tr('modelInfo');
@@ -206,10 +218,12 @@ async function applyLang() {
 async function loadPrefs() {
   const r = await chrome.storage.local.get(PREFS_KEY);
   const prefs: Record<string, any> = r[PREFS_KEY] || {};
-  // 音源恢复：仅支持平台才接受 system；不支持平台禁用系统音频选项并强制回 tab
-  const optSystem = selSource.querySelector<HTMLOptionElement>('option[value="system"]');
-  if (optSystem && !SYSTEM_AUDIO_SUPPORTED) optSystem.disabled = true;
-  selSource.value = SYSTEM_AUDIO_SUPPORTED && prefs.audioSource === 'system' ? 'system' : 'tab';
+  // 音源恢复：三态直读，不做平台相关的静默回退。若在不支持平台上恢复出 system，
+  // 用户会立刻看到 updateSourceHint 给出的「当前设备不支持」原因——比偷偷改成 tab
+  // 更可理解（用户上次明确选过 system，回退会让他以为选项丢失）。
+  const savedSource = prefs.audioSource === 'mic' ? 'mic'
+    : prefs.audioSource === 'system' ? 'system' : 'tab';
+  selSource.value = savedSource;
   updateSourceHint();
   if (prefs.fontSize) {
     fontSizeSlider.value = String(prefs.fontSize);
@@ -267,22 +281,35 @@ async function loadPrefs() {
   endpointVal3.textContent = r3 + 's';
 }
 
+// 坑：读-合并-写三段式的经典 lost-update——两个 savePrefs 并发时各自读到同一份旧
+// prefs，后写者把自己的合并结果整个覆盖上去，先写者的键无声蒸发（例如选音源的同时
+// 另一个回调补写自己的键，audioSource 就是这样被盖丢的，表现为"设置不持久化"）。
+// 全部走 Promise 链串行：每个合并都基于上一次写完的最新状态。
+let prefsChain: Promise<void> = Promise.resolve();
 function savePrefs(partial: Record<string, any>) {
-  chrome.storage.local.get(PREFS_KEY).then(r => {
+  prefsChain = prefsChain.then(async () => {
+    const r = await chrome.storage.local.get(PREFS_KEY);
     const merged = { ...((r[PREFS_KEY] as any) || {}), ...partial };
-    chrome.storage.local.set({ [PREFS_KEY]: merged });
-  });
+    await chrome.storage.local.set({ [PREFS_KEY]: merged });
+  }).catch(() => {});
 }
 
-// 音源提示随当前选择刷新：仅 system 时展示（支持平台给操作指引，不支持平台给禁用原因）
+// 音源提示与当前选择一一对应：mic 给设备指引；system 在支持的平台给选择器操作指引、
+// 在不支持的平台给「当前设备不支持」原因与替代建议。三态提示都挂在选中项上，
+// 用户选了才会看到原因——这就是「允许切换 + 选中后告知为何不行」的实现点。
 function updateSourceHint() {
-  if (selSource.value !== 'system') {
-    sourceHintEl.hidden = true;
-    sourceHintEl.textContent = '';
+  if (selSource.value === 'mic') {
+    sourceHintEl.textContent = tSync(currentLang, 'sourceHintMic');
+    sourceHintEl.hidden = false;
     return;
   }
-  sourceHintEl.textContent = tSync(currentLang, SYSTEM_AUDIO_SUPPORTED ? 'sourceHintSystem' : 'sourceHintNoSysAudio');
-  sourceHintEl.hidden = false;
+  if (selSource.value === 'system') {
+    sourceHintEl.textContent = tSync(currentLang, SYSTEM_AUDIO_SUPPORTED ? 'sourceHintSystem' : 'sourceHintNoSysAudio');
+    sourceHintEl.hidden = false;
+    return;
+  }
+  sourceHintEl.hidden = true;
+  sourceHintEl.textContent = '';
 }
 
 // —— C. 主题系统：切 body[data-theme] 换 CSS 变量组，纯属性切换零重排成本 ——
@@ -682,6 +709,50 @@ function log(msg: string) {
   modelStatus.textContent = msg;
 }
 
+// —— 系统音频不支持·模态提示 ——
+// 为什么要模态而不是行内小字：点「开始」后 popup 会立刻关闭，行内提示用户根本
+// 来不及看（早期版本就是这么写，等于没有反馈）。模态层需要用户动手关掉，能把
+// 原因和下一步顶到眼前，且不引入 notifications 权限。
+// 「改用麦克风」按钮直接把音源切过去并存盘，用户读到原因的同时就能完成修正。
+// 文案填充单独成函数：模态开着时用户切语言（applyLang 重跑）也要跟着刷新，
+// 否则卡片停在旧语言，与周围刚变过的界面不一致。
+function fillUnsupportedModalText() {
+  unsupTitle.textContent = tSync(currentLang, 'notifUnsupportedTitle');
+  unsupBody.textContent = tSync(currentLang, 'notifUnsupportedBody');
+  unsupSwitch.textContent = tSync(currentLang, 'unsupSwitchMic');
+  unsupClose.textContent = tSync(currentLang, 'unsupGotIt');
+}
+
+function showUnsupportedModal() {
+  fillUnsupportedModalText();
+  unsupModal.hidden = false;
+  // 焦点给主操作：键盘用户 Tab 一次即可确认，不被遮罩层吞掉焦点
+  unsupSwitch.focus();
+}
+
+function hideUnsupportedModal() {
+  unsupModal.hidden = true;
+}
+
+unsupSwitch.onclick = () => {
+  // 切到麦克风并落库：与手动改下拉完全等价（走同一条 savePrefs 串行链）
+  selSource.value = 'mic';
+  savePrefs({ audioSource: 'mic' });
+  updateSourceHint();
+  hideUnsupportedModal();
+};
+
+unsupClose.onclick = hideUnsupportedModal;
+
+// 点遮罩空白处关闭（卡片内部点击不冒泡到此：见下方 stopPropagation 处理）
+unsupModal.onclick = (e) => {
+  if (e.target === unsupModal) hideUnsupportedModal();
+};
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !unsupModal.hidden) hideUnsupportedModal();
+});
+
 function updateLockUI() {
   const tr = (key: string) => tSync(currentLang, key);
   const isLocked = locked;
@@ -692,16 +763,36 @@ function updateLockUI() {
 }
 
 selSource.onchange = () => {
-  savePrefs({ audioSource: selSource.value === 'system' ? 'system' : 'tab' });
+  // 三态原样落库（含不支持平台上的 system）：不静默改写用户的显式选择，
+  // 不支持一事由 updateSourceHint 在选中后当面告知。
+  const v: 'tab' | 'system' | 'mic' =
+    selSource.value === 'mic' ? 'mic'
+      : selSource.value === 'system' ? 'system' : 'tab';
+  savePrefs({ audioSource: v });
   updateSourceHint();
 };
 
 btnStart.onclick = async () => {
   // nomodel 版门卫：包内无 .data 且未导入过 → 弹窗中窗引导，导入成功自动继续本次启动
   if (!(await ensureAsrModel())) return;
-  const source: 'tab' | 'system' = selSource.value === 'system' && SYSTEM_AUDIO_SUPPORTED ? 'system' : 'tab';
-  // 系统音频模式不依赖活动标签页（captureTabId 恒 null，字幕走悬浮窗），跳过 noActiveTab 检查
-  if (source === 'system') {
+  const source: 'tab' | 'system' | 'mic' =
+    selSource.value === 'mic' ? 'mic'
+      : selSource.value === 'system' ? 'system' : 'tab';
+  // 坑：不支持平台选了 system 时【必须明确拦下并说明】，不能静默降级成 tab——
+  // 降级会让用户以为系统音频能用、只是没声音，排查方向完全错。
+  if (source === 'system' && !SYSTEM_AUDIO_SUPPORTED) {
+    setStatus('Stopped');
+    log(tSync(currentLang, 'sysAudioUnsupported'));
+    updateSourceHint();
+    // 行内提示会随 popup 关闭一起消失，模态层才是用户真正看得见的那一次反馈
+    showUnsupportedModal();
+    return;
+  }
+  // 系统音频/麦克风模式不依赖活动标签页（captureTabId 恒 null，字幕走悬浮窗），跳过 noActiveTab 检查
+  if (source !== 'tab') {
+    // 麦克风授权与采集都发生在悬浮字幕窗（可见页面）：popup 不再碰 getUserMedia——
+    // offscreen 文档禁采麦克风、popup 内气泡又不可靠（挂死/被抑制），只有真窗口能弹框。
+    // 不传 deviceId：由 Chrome 授权弹窗让用户选设备，浏览器记住所选，后续自动沿用。
     chrome.runtime.sendMessage({
       type: 'START_RECOGNITION',
       source,

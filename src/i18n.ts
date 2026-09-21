@@ -168,13 +168,27 @@ const strings: Record<string, Record<string, string>> = {
     // —— 字幕记录导出 ——
     exportLabel: '导出',
     exportHelp: '导出当前保存的字幕记录（含译文，若有）：TXT 纯文本 / SRT 字幕（可导入播放器）/ JSON 原数据。',
-    // —— 音频来源：系统音频（desktopCapture）+ 悬浮字幕窗 ——
+    // —— 音频来源：标签页 / 系统音频（desktopCapture）/ 麦克风 + 悬浮字幕窗 ——
     sourceTab: '当前标签页',
     sourceSystem: '系统音频（整个屏幕）',
     sourceHintSystem: '开始识别后将弹出 Chrome 屏幕选择器：请选择「整个屏幕」并勾选「分享系统音频」（Windows / ChromeOS 全版本支持；macOS 需 Chrome 141+ 与 macOS 14.2+）。',
-    sourceHintNoSysAudio: '当前平台不支持系统音频捕获（仅 Windows / ChromeOS / 新版 macOS），已禁用该选项。',
+    sourceHintNoSysAudio: '当前设备不支持系统音频捕获（仅 Windows / ChromeOS / 新版 macOS 支持）。请改用「麦克风」来识别外放的声音。',
+    sysAudioUnsupported: '当前设备不支持系统音频捕获，识别未开始。请把音频来源改为「麦克风」。',
+    // —— 不支持平台点击「开始」时的窗内模态提示（popup 会随点击关闭，行内小字看不到）——
+    notifUnsupportedTitle: '无法使用系统音频',
+    notifUnsupportedBody: '当前设备不支持系统音频捕获（仅 Windows / ChromeOS / 新版 macOS 支持），识别未开始。',
+    unsupSwitchMic: '改用麦克风',
+    unsupGotIt: '我知道了',
     pickerCancelled: '已取消屏幕选择，识别未开始',
     sourceOutsideTip: '想在浏览器之外的软件上用字幕？试试改一下音频来源',
+    // —— 麦克风音源（采集在悬浮字幕窗内，PCM 经 bg 转发给 offscreen）——
+    // 无「麦克风设备」选择项：设备由 Chrome 授权弹窗选择并记住，扩展内不重复该 UI
+    sourceMic: '麦克风',
+    sourceHintMic: '识别麦克风采集到的声音。首次开始识别时会在悬浮字幕窗上弹出 Chrome 授权框（可在其中选择设备，浏览器会记住），字幕显示在悬浮窗。',
+    micDenied: '未获得麦克风权限或设备不可用，识别未开始',
+    micTrackEnded: '麦克风设备已断开，识别已停止',
+    micFailFallback: '麦克风采集失败，识别已停止',
+    micGrantTip: '若未弹出授权框，请在悬浮字幕窗的地址栏左侧图标里允许麦克风后重试。',
     floatPin: '置顶显示',
     floatUnpin: '取消置顶',
     floatFontUp: '放大字号',
@@ -328,13 +342,28 @@ const strings: Record<string, Record<string, string>> = {
     reselectModel: 'Reselect Model',
     // —— Transcript export ——
     exportHelp: 'Export the saved transcript (includes translations when present): TXT plain text / SRT subtitles (importable into players) / JSON raw data.',
-    // —— Audio source: system audio (desktopCapture) + floating window ——
+    exportLabel: 'Export',
+    // —— Audio source: tab / system audio (desktopCapture) / microphone + floating window ——
     sourceTab: 'Current tab',
     sourceSystem: 'System audio (entire screen)',
     sourceHintSystem: 'After you press Start, Chrome shows a picker: choose "Entire screen" and tick "Share system audio" (Windows / ChromeOS all versions; macOS requires Chrome 141+ and macOS 14.2+).',
-    sourceHintNoSysAudio: 'System audio capture is not supported on this platform (Windows / ChromeOS / recent macOS only); the option is disabled.',
+    sourceHintNoSysAudio: 'System audio capture is not supported on this device (Windows / ChromeOS / recent macOS only). Switch to "Microphone" to transcribe audio from your speakers.',
+    sysAudioUnsupported: 'System audio capture is not supported on this device — recognition not started. Please switch the audio source to "Microphone".',
+    notifUnsupportedTitle: 'System audio unavailable',
+    notifUnsupportedBody: 'System audio capture is not supported on this device (Windows / ChromeOS / recent macOS only) — recognition did not start.',
+    unsupSwitchMic: 'Use microphone',
+    unsupGotIt: 'Got it',
     pickerCancelled: 'Screen picking cancelled — recognition not started',
     sourceOutsideTip: 'Want subtitles in apps outside the browser? Try switching the audio source.',
+    // —— Microphone source (captured in the floating window, PCM relayed via bg to offscreen) ——
+    // No "microphone device" picker: Chrome's permission prompt lets the user choose the
+    // device and remembers it, so the extension does not duplicate that UI.
+    sourceMic: 'Microphone',
+    sourceHintMic: 'Transcribes what the microphone hears. On the first start, Chrome\'s permission prompt appears on the floating subtitle window (pick your device there — the browser remembers it); subtitles show in the floating window.',
+    micDenied: 'Microphone permission denied or device unavailable — recognition not started',
+    micTrackEnded: 'Microphone device disconnected — recognition stopped',
+    micFailFallback: 'Microphone capture failed — recognition stopped',
+    micGrantTip: 'If no prompt appeared, allow the microphone from the icon at the left of the floating window\'s address bar, then retry.',
     floatPin: 'Pin on top',
     floatUnpin: 'Unpin',
     floatFontUp: 'Increase font size',

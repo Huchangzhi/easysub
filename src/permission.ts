@@ -4,6 +4,18 @@ const statusEl = document.getElementById('status')!;
 const btn = document.getElementById('btnGrant') as HTMLButtonElement;
 const btnLang = document.getElementById('btnLang') as HTMLButtonElement;
 
+// 状态行统一走安全 DOM 构建（文本全部经 textContent 落盘，不经过 HTML 解析）。
+// 坑：原实现用 innerHTML 拼接错误对象，e.toString() 的内容会被当 HTML 解析，
+// 某些 UA 错误信息含尖括号时可注入标记。
+function setStatusLine(text: string, cls: '' | 'ok' | 'err') {
+  statusEl.replaceChildren();
+  if (!cls) { statusEl.textContent = text; return; }
+  const span = document.createElement('span');
+  span.className = cls;
+  span.textContent = text;
+  statusEl.appendChild(span);
+}
+
 let currentLang = 'zh_CN';
 
 async function applyLang() {
@@ -24,14 +36,15 @@ btnLang.onclick = async () => {
 btn.onclick = async () => {
   btn.disabled = true;
   const tr = (key: string) => tSync(currentLang, key);
-  statusEl.textContent = tr('permissionRequesting');
+  setStatusLine(tr('permissionRequesting'), '');
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach(t => t.stop());
-    statusEl.innerHTML = '<span class="ok">' + tr('permissionGranted') + '</span>';
+    setStatusLine(tr('permissionGranted'), 'ok');
     chrome.storage.local.set({ micGranted: true });
-  } catch (e) {
-    statusEl.innerHTML = `<span class="err">✗ ${tr('permissionFailed')}: ${e}</span>`;
+    btn.disabled = false;
+  } catch (e: any) {
+    setStatusLine(`✗ ${tr('permissionFailed')}: ${e?.message || e}`, 'err');
     btn.disabled = false;
   }
 };

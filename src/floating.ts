@@ -166,6 +166,76 @@ function applyLang() {
   document.title = tr('appTitle');
 }
 
+// ---- 麦克风采集宿主（mic 音源）----
+// Chrome 不允许 offscreen 文档做 getUserMedia 麦克风采集（直接 NotAllowedError），
+// 权限气泡也只能出现在可见窗口——所以 mic 模式下本窗口兼任采集端：PCM 以 16k 单声道
+// 经 audio-worklet-processor.js（与 offscreen 本地采集同一协议）出块，交 bg 转发给
+// offscreen 的识别管道。首次使用时的麦克风授权弹窗就挂在本窗口上。
+// 不指定 deviceId：交给 Chrome 授权弹窗选择设备（并记住），与不下拉设备的取舍一致。
+let micStream: MediaStream | null = null;
+let micCtx: AudioContext | null = null;
+let micWorklet: AudioWorkletNode | null = null;
+let micFlushTimer: any = null;
+let micActive = false;
+
+function micStop() {
+  micActive = false;
+  if (micFlushTimer) { clearInterval(micFlushTimer); micFlushTimer = null; }
+  if (micWorklet) { try { micWorklet.port.onmessage = null; micWorklet.disconnect(); } catch { /* 已断开 */ } micWorklet = null; }
+  if (micCtx) { micCtx.close().catch(() => {}); micCtx = null; }
+  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+}
+
+function micFail(name: string, error: string) {
+  try { port.postMessage({ type: 'MIC_RESULT', ok: false, name, error }); } catch { /* 端口已断，bg 侧自会停会话 */ }
+}
+
+async function micStart() {
+  // 重复指令（启动直发 + 端口重连补发双入口）幂等跳过：已在采就不重开
+  if (micActive) return;
+  micStop();
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e: any) {
+    micFail(e?.name || '', e?.message || String(e));
+    return;
+  }
+  try {
+    micCtx = new AudioContext({ sampleRate: 16000 }); // 强制 16k：下游管道直吃，零重采样
+    const src = micCtx.createMediaStreamSource(micStream);
+    await micCtx.audioWorklet.addModule(chrome.runtime.getURL('audio-worklet-processor.js'));
+    const node = new AudioWorkletNode(micCtx, 'audio-buffer');
+    micWorklet = node;
+    src.connect(node);
+    node.port.onmessage = (ev: MessageEvent) => {
+      if (!ev.data?.audio) return;
+      // 坑：chrome.runtime.Port 的 postMessage 走 JSON 结构化克隆，ArrayBuffer 会被
+      // 序列化成空对象（byteLength 丢失、字节内容全无），PCM 静默变垃圾。
+      // 必须转成普通数组传（Float32 样本经 JSON 是保值的），接收端再还原 Float32Array。
+      const f32 = new Float32Array(ev.data.audio);
+      if (!f32.length) return;
+      try {
+        port.postMessage({ type: 'MIC_CHUNK', audio: Array.from(f32), sampleRate: ev.data.sampleRate });
+      } catch { /* 端口瞬断（窗口正在关闭），下一块继续 */ }
+    };
+    // 与 offscreen 本地采集同一节拍：60ms 推一次 flush，让 worklet 吐块
+    micFlushTimer = setInterval(() => { try { node.port.postMessage('flush'); } catch { /* 节点已销毁 */ } }, 60);
+    micActive = true;
+    // 设备中途被拔：轨道 ended 即断粮，报 bg 结束会话（无音频的 Running 是幽灵态）
+    micStream.getAudioTracks()[0]?.addEventListener('ended', () => {
+      if (!micActive) return;
+      micStop();
+      micFail('TrackEnded', '麦克风设备已断开');
+    });
+  } catch (e: any) {
+    micStop();
+    micFail(e?.name || '', e?.message || String(e));
+  }
+}
+
+// 窗口关闭/重载即停采集：轨道随之释放，避免麦克风指示灯常亮
+window.addEventListener('pagehide', micStop);
+
 // ---- 消息处理：显示类交给共享叠层（协议与页内 content.ts 完全一致），
 // 状态类由本壳自用 ----
 port.onMessage.addListener((msg: any) => {
@@ -173,6 +243,8 @@ port.onMessage.addListener((msg: any) => {
     running = msg.status === 'Running';
     btnStop.disabled = !running;
   }
+  if (msg?.type === 'MIC_CAPTURE_START') { void micStart(); return; }
+  if (msg?.type === 'MIC_CAPTURE_STOP') { micStop(); return; }
   overlayHost.handle(msg);
 });
 
