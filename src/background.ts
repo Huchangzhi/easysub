@@ -10,9 +10,15 @@ const SESSION_KEY = 'runningSession';
 // storage，就会出现"三端锁态发散"（popup 说没锁 / 字幕层实际锁着 / 新建层按未锁绘制）。
 const LOCK_KEY = 'tmspeech_locked';
 let captureTabId: number | null = null;
-// 音频来源：'tab'=标签页捕获 | 'system'=系统音频（offscreen 内 getDisplayMedia 环回）。system 模式无目标
-// 标签页，captureTabId 恒为 null，"关标签页自动停止"/字幕层注入等 tab 逻辑全部天然跳过。
-let sessionSource: 'tab' | 'system' = 'tab';
+// 音频来源：'tab'=标签页捕获 | 'system'=系统音频（offscreen 内 getDisplayMedia 环回）
+// | 'mic'=麦克风。system/mic 模式无目标标签页，captureTabId 恒为 null，
+// "关标签页自动停止"/字幕层注入等 tab 逻辑全部天然跳过，字幕显示端为悬浮窗。
+let sessionSource: 'tab' | 'system' | 'mic' = 'tab';
+// 麦克风采集的宿主是悬浮字幕窗（可见扩展页）：Chrome 不允许 offscreen 文档做
+// getUserMedia 音频采集（报 NotAllowedError，权限气泡也无从展示），而系统音频的
+// getDisplayMedia 选择器是特批例外——所以 mic 模式的音频轨只能在悬浮窗里拿。
+// popup → bg → 悬浮窗开流，PCM 块经 bg 中转喂给 offscreen 的识别管道。
+// 设备不在此处指定：交给 Chrome 授权弹窗选择并记住，扩展内不做设备下拉。
 // 悬浮字幕窗（独立扩展页弹窗，可置顶画中画）：仅显示端，关窗不影响识别会话。
 let floatingWinId: number | null = null;
 let floatingPort: chrome.runtime.Port | null = null;
@@ -79,7 +85,7 @@ function closeFloating() {
 function persistSession() {
   // 坑：会话快照的单一出口。所有改写 captureTabId/pipelineStatus 的地方都要同步调它，
   // 否则 SW 冷启动后 onRemoved/RECONNECT 会读到过期快照（把已停会话当活的，或反之）。
-  if (pipelineStatus === 'Running' && (captureTabId != null || sessionSource === 'system')) {
+  if (pipelineStatus === 'Running' && (captureTabId != null || sessionSource !== 'tab')) {
     // 坑：startedAt 仅在 >0 时写入——SW 冷启动恢复路径（RECONNECT 自愈）内存里是 0，
     // 若无条件覆盖会把重启前已盖章的真实开始时刻冲掉，popup 计时又归零
     const snap: any = { tabId: captureTabId, status: pipelineStatus, source: sessionSource };
@@ -171,9 +177,43 @@ chrome.runtime.onConnect.addListener((port) => {
     port.onDisconnect.addListener(() => {
       if (floatingPort === port) floatingPort = null;
     });
+    // 悬浮窗回传：mic PCM 块转发给 offscreen 直接喂管道；开流失败则终止会话
+    port.onMessage.addListener((m: any) => {
+      if (m?.type === 'MIC_CHUNK') {
+        if (!m.audio) return;
+        // audio 是 number[]（Port 的 JSON 克隆所致，见 floating.ts 注释），原样中继即可
+        try { offscreenPort?.postMessage({ type: 'MIC_CHUNK', audio: m.audio, sampleRate: m.sampleRate }); } catch { /* offscreen 未就绪，丢弃本块 */ }
+        return;
+      }
+      if (m?.type === 'MIC_RESULT' && m.ok !== true) {
+        // 文案走 i18n（双语）：权限被拒与其它失败分开表述，前者额外给出补救入口
+        void (async () => {
+          const msg = m.name === 'NotAllowedError'
+            ? `${await t('micDenied')} ${await t('micGrantTip')}`
+            : m.name === 'TrackEnded'
+              ? await t('micTrackEnded')
+              : `${await t('micFailFallback')}: ${m.error || ''}`.trim();
+          sendToPopup({ type: 'ERROR', message: msg });
+        })();
+        cleanupAll();
+      }
+    });
     // 刚打开的悬浮窗不知道会话状态：补发当前状态 + 让 offscreen 重发当前句文本
     sendToFloating({ type: 'STATUS_CHANGED', status: pipelineStatus, startedAt: sessionStartedAt });
     try { offscreenPort?.postMessage({ type: 'RESEND_CURRENT_TEXT' }); } catch {} // eslint-disable-line no-empty
+    // mic 会话的采集端就在这个窗口里：端口一连上（含冷 SW 复活/窗口重载）就下采集令。
+    // 内存态不可信时回源会话快照——SW 被回收再唤醒后 sessionSource 归零是常态。
+    (async () => {
+      let src = sessionSource, status = pipelineStatus;
+      if (status !== 'Running') {
+        try {
+          const s = (await chrome.storage.session.get(SESSION_KEY))[SESSION_KEY] as
+            { source?: 'tab' | 'system' | 'mic'; status?: string } | undefined;
+          if (s?.status === 'Running') { src = s.source || src; status = s.status; }
+        } catch { /* 读不到快照就按内存态 */ }
+      }
+      if (status === 'Running' && src === 'mic') sendToFloating({ type: 'MIC_CAPTURE_START' });
+    })();
     return;
   }
   if (port.name !== 'offscreen') return;
@@ -191,6 +231,12 @@ chrome.runtime.onConnect.addListener((port) => {
       if (pipelineStatus !== 'Running') {
         chrome.offscreen.closeDocument().catch(() => {});
       }
+      return;
+    }
+    if (msg.type === 'FW_STOP') {
+      // offscreen 采集被取消/失败：音频注定进不来，走与手动停止完全相同的统一清理，
+      // 否则 bg 停在 Running、悬浮窗空挂成幽灵会话（同条 ERROR 已先行扇出，popup 归位）
+      cleanupAll();
       return;
     }
     if (msg.type === 'FW_CT') {
@@ -245,10 +291,11 @@ chrome.runtime.onConnect.addListener((port) => {
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         console.log('[TM BG] offscreen 重连, status=', msg.payload.status, 'tabId=', msg.payload.tabId);
         pipelineStatus = msg.payload.status;
-        const reviveSource: 'tab' | 'system' = msg.payload.source === 'system' ? 'system' : 'tab';
+        const reviveSource: 'tab' | 'system' | 'mic' =
+          msg.payload.source === 'system' || msg.payload.source === 'mic' ? msg.payload.source : 'tab';
         sessionSource = reviveSource;
-        if (msg.payload.status === 'Running' && reviveSource === 'system') {
-          // system 模式自愈：无标签页可校验，直接恢复会话状态（悬浮窗/popup 靠扇出消息刷新）
+        if (msg.payload.status === 'Running' && reviveSource !== 'tab') {
+          // system/mic 模式自愈：无标签页可校验，直接恢复会话状态（悬浮窗/popup 靠扇出消息刷新）
           captureTabId = null;
           const backfill = !sessionStartedAt
             ? chrome.storage.session.get(SESSION_KEY).then((stored) => {
@@ -441,6 +488,124 @@ async function handleCapturedTabClosed(closedTabId: number) {
 let translateTestSeq = 0;
 const translateTestResolvers: Record<number, (r: any) => void> = {};
 
+// 识别会话启动体：popup 的 START_RECOGNITION 消息进入。respond 统一收口
+// sendResponse（异步完成时经闭包回调确认通道）。
+async function startRecognition(msg: any, respond: () => void) {
+  try {
+    // 坑：上一会话可能刚被"关标签页自动停止"清理，其 closeDocument 是异步生效的；
+    // 旧文档还没销毁完就创建新文档、申请新 capture 流会撞上释放竞态，典型表现就是
+    // offscreen 里 getUserMedia 报 "Error starting tab capture"。
+    // 同时清掉可能遗留的重连超时定时器，防止它把刚启动的新会话误判成断连而清场。
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    // 本次启动的会话代次：异步体在每个 await 恢复点核对，期间发生过任何清理
+    // （STOP/关标签页/错误清理）代次都会前进，此时必须立即中止后续步骤，
+    // 否则就是"用户已停止但采集继续"的幽灵会话。
+    const myEpoch = ++sessionEpoch;
+    const stale = () => myEpoch !== sessionEpoch;
+    await chrome.offscreen.closeDocument().catch(() => {});
+    if (stale()) { respond(); return; }
+    // closeDocument 会触发 onDisconnect 置空 offscreenPort
+    // 等旧文档真正消失（上限 1.5s）再继续，给 Chrome 时间异步释放旧 capture 流
+    const releaseDeadline = Date.now() + 1500;
+    while (await chrome.offscreen.hasDocument()) {
+      if (Date.now() > releaseDeadline) break; // 极端情况下放行，让后续错误正常暴露
+      await new Promise(r => setTimeout(r, 50));
+      if (stale()) { respond(); return; }
+    }
+    chrome.storage.session.remove(PENDING_KEY);
+    if (stale()) { respond(); return; }
+
+    pipelineStatus = 'Running';
+    // 音频来源：system/mic 模式无目标标签页（captureTabId 恒 null），跳过字幕层注入等 tab 逻辑
+    const source: 'tab' | 'system' | 'mic' =
+      msg.source === 'system' || msg.source === 'mic' ? msg.source : 'tab';
+    sessionSource = source;
+    captureTabId = source === 'tab' ? (msg.tabId || null) : null;
+    sessionStartedAt = Date.now(); // START 成功即盖会话开始戳，计时基准唯一事实源
+    persistSession();
+    // 用户确认：音源为系统/麦克风 → 自动开悬浮字幕窗（无标签页可注入，悬浮窗是唯一显示端）；
+    // 音源为标签页 → 关闭悬浮窗，字幕回到浏览器内叠层。失败仅记日志，不阻断识别启动。
+    if (source !== 'tab') {
+      openFloating().catch((e) => console.log('[TM BG] 自动打开悬浮字幕窗失败:', e));
+      // mic：悬浮窗已在（二次启动复用旧窗，不会有新的 onConnect）→ 直接下采集令；
+      // 新开窗口则等 onConnect 补发。floating 侧对重复指令幂等，双发无害。
+      if (source === 'mic' && floatingPort) sendToFloating({ type: 'MIC_CAPTURE_START' });
+    } else {
+      closeFloating();
+    }
+    if (captureTabId && msg.overlayVisible) {
+      const alreadyInjected = await isContentScriptInjected(captureTabId);
+      if (stale()) { respond(); return; }
+      if (!alreadyInjected) {
+        await chrome.scripting.executeScript({
+          target: { tabId: captureTabId },
+          files: ['content.js'],
+        }).catch(() => {});
+        if (stale()) { respond(); return; }
+      }
+      sendToTab(captureTabId, { type: 'OVERLAY_TOGGLE', visible: true });
+      // 坑：新建字幕层初始按未锁定样式绘制，content 自身异步读 storage 存在窗口期；
+      // 若权威锁态是"已锁"而无人纠正，就出现用户报告的"锁定后仍有半透明背景/毛玻璃"。
+      // 这里读唯一事实源立即补发 LOCK_TOGGLE，让新层马上收敛到权威锁态。
+      chrome.storage.local.get(LOCK_KEY).then(r => {
+        // fire-and-forget 回调同样要核对会话代次，防止停止后残留回调打扰新会话。
+        if (stale() || !captureTabId) return;
+        sendToTab(captureTabId!, { type: 'LOCK_TOGGLE', locked: r[LOCK_KEY] === true });
+      }).catch(() => {});
+      chrome.storage.local.get('tmspeech_prefs').then(r => {
+        // 坑：此回调是 fire-and-forget，恢复执行时不做代次核对的话，
+        // 停止后残留的回调会把 prefs 发到新会话（或已停止会话）的标签页上。
+        if (stale() || !captureTabId) return;
+        const prefs = (r['tmspeech_prefs'] as any) || {};
+        if (prefs.fontSize) sendToTab(captureTabId!, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
+        sendToTab(captureTabId!, { type: 'SET_PREV_OPTS', showPrev: prefs.showPrev !== false, prevOpacity: prefs.prevOpacity ?? 35 });
+      });
+    }
+
+    // 坑：不要在这里预先签发 capture streamId！它的有效期很短，而 offscreen 冷启动
+    // 加载 WASM 模型可能耗时远超这个窗口，等模型就绪再用早已过期的 id 去
+    // getUserMedia，就会报 "Error starting tab capture"。改为由 offscreen 在模型
+    // 就绪后发 REQUEST_STREAM，这里即时签发、立即消费。
+    await ensureOffscreen();
+    if (stale()) { respond(); return; }
+
+    const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
+    const punctPref = (await chrome.storage.local.get('tmspeech_use_punct'))['tmspeech_use_punct'];
+    const prefs = ((await chrome.storage.local.get('tmspeech_prefs'))['tmspeech_prefs'] as any) || {};
+    if (stale()) { respond(); return; }
+    const initMsg: any = { type: 'INIT_OFFSCREEN', tabId: msg.tabId, source, lang, usePunct: punctPref !== false };
+    if (prefs.endpointRule1) initMsg.endpointRule1 = prefs.endpointRule1;
+    if (prefs.endpointRule2) initMsg.endpointRule2 = prefs.endpointRule2;
+    if (prefs.endpointRule3) initMsg.endpointRule3 = prefs.endpointRule3;
+    // 实时翻译开关/方向随 INIT 下发（offscreen 无 chrome.storage 访问权，由 bg 转发）
+    initMsg.translationEnabled = prefs.translationEnabled === true;
+    const tdir = prefs.translationDirection;
+    initMsg.translationDirection = tdir === 'zh-en' || tdir === 'en-zh' ? tdir : 'auto';
+    initMsg.translationTiming = prefs.translationTiming === 'final' ? 'final' : 'stream';
+    // 热词随 INIT 下发：offscreen 建 recognizer 时一次性烘焙进配置
+    const hotwords = (await chrome.storage.local.get('tmspeech_hotwords'))['tmspeech_hotwords'];
+    if (Array.isArray(hotwords) && hotwords.length) initMsg.hotwords = hotwords;
+    if (offscreenPort) {
+      offscreenPort.postMessage(initMsg);
+    } else {
+      await chrome.storage.session.set({ [PENDING_KEY]: initMsg });
+      if (stale()) {
+        // 坑：pending 快照是给"下一个连上的 offscreen 文档"的投递队列——START 已被
+        // 作废时必须删掉它，否则下次无关的端口连接会把过期 INIT 投递出去（幽灵启动）。
+        chrome.storage.session.remove(PENDING_KEY).catch(() => {});
+        respond();
+        return;
+      }
+    }
+
+    respond();
+  } catch (e) {
+    sendToPopup({ type: 'ERROR', message: `启动失败: ${e}` });
+    cleanupAll();
+    respond();
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'TRANSLATE_TEST') {
     // 面板"测试翻译"：转发给 offscreen（无 storage 权限，纯中继），用 id 关联应答。
@@ -462,116 +627,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg.type === 'START_RECOGNITION') {
-    (async () => {
-      // 坑：上一会话可能刚被"关标签页自动停止"清理，其 closeDocument 是异步生效的；
-      // 旧文档还没销毁完就创建新文档、申请新 capture 流会撞上释放竞态，典型表现就是
-      // offscreen 里 getUserMedia 报 "Error starting tab capture"。
-      // 同时清掉可能遗留的重连超时定时器，防止它把刚启动的新会话误判成断连而清场。
-      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-      // 本次启动的会话代次：异步体在每个 await 恢复点核对，期间发生过任何清理
-      // （STOP/关标签页/错误清理）代次都会前进，此时必须立即中止后续步骤，
-      // 否则就是"用户已停止但采集继续"的幽灵会话。
-      const myEpoch = ++sessionEpoch;
-      const stale = () => myEpoch !== sessionEpoch;
-      await chrome.offscreen.closeDocument().catch(() => {});
-      if (stale()) { sendResponse({}); return; }
-      // closeDocument 会触发 onDisconnect 置空 offscreenPort
-      // 等旧文档真正消失（上限 1.5s）再继续，给 Chrome 时间异步释放旧 capture 流
-      const releaseDeadline = Date.now() + 1500;
-      while (await chrome.offscreen.hasDocument()) {
-        if (Date.now() > releaseDeadline) break; // 极端情况下放行，让后续错误正常暴露
-        await new Promise(r => setTimeout(r, 50));
-        if (stale()) { sendResponse({}); return; }
-      }
-      chrome.storage.session.remove(PENDING_KEY);
-      if (stale()) { sendResponse({}); return; }
-
-      pipelineStatus = 'Running';
-      // 音频来源：system 模式无目标标签页（captureTabId 恒 null），跳过字幕层注入等 tab 逻辑
-      const source: 'tab' | 'system' = msg.source === 'system' ? 'system' : 'tab';
-      sessionSource = source;
-      captureTabId = source === 'system' ? null : (msg.tabId || null);
-      sessionStartedAt = Date.now(); // START 成功即盖会话开始戳，计时基准唯一事实源
-      persistSession();
-      // 用户确认：音源为系统 → 自动开悬浮字幕窗（system 模式唯一显示端）；音源为标签页 →
-      // 关闭悬浮窗，字幕回到浏览器内叠层。失败仅记日志，不阻断识别启动。
-      if (source === 'system') {
-        openFloating().catch((e) => console.log('[TM BG] 自动打开悬浮字幕窗失败:', e));
-      } else {
-        closeFloating();
-      }
-      if (captureTabId && msg.overlayVisible) {
-        const alreadyInjected = await isContentScriptInjected(captureTabId);
-        if (stale()) { sendResponse({}); return; }
-        if (!alreadyInjected) {
-          await chrome.scripting.executeScript({
-            target: { tabId: captureTabId },
-            files: ['content.js'],
-          }).catch(() => {});
-          if (stale()) { sendResponse({}); return; }
-        }
-        sendToTab(captureTabId, { type: 'OVERLAY_TOGGLE', visible: true });
-        // 坑：新建字幕层初始按未锁定样式绘制，content 自身异步读 storage 存在窗口期；
-        // 若权威锁态是"已锁"而无人纠正，就出现用户报告的"锁定后仍有半透明背景/毛玻璃"。
-        // 这里读唯一事实源立即补发 LOCK_TOGGLE，让新层马上收敛到权威锁态。
-        chrome.storage.local.get(LOCK_KEY).then(r => {
-          // fire-and-forget 回调同样要核对会话代次，防止停止后残留回调打扰新会话。
-          if (stale() || !captureTabId) return;
-          sendToTab(captureTabId!, { type: 'LOCK_TOGGLE', locked: r[LOCK_KEY] === true });
-        }).catch(() => {});
-        chrome.storage.local.get('tmspeech_prefs').then(r => {
-          // 坑：此回调是 fire-and-forget，恢复执行时不做代次核对的话，
-          // 停止后残留的回调会把 prefs 发到新会话（或已停止会话）的标签页上。
-          if (stale() || !captureTabId) return;
-          const prefs = (r['tmspeech_prefs'] as any) || {};
-          if (prefs.fontSize) sendToTab(captureTabId!, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
-          sendToTab(captureTabId!, { type: 'SET_PREV_OPTS', showPrev: prefs.showPrev !== false, prevOpacity: prefs.prevOpacity ?? 35 });
-        });
-      }
-
-      // 坑：不要在这里预先签发 capture streamId！它的有效期很短，而 offscreen 冷启动
-      // 加载 WASM 模型可能耗时远超这个窗口，等模型就绪再用早已过期的 id 去
-      // getUserMedia，就会报 "Error starting tab capture"。改为由 offscreen 在模型
-      // 就绪后发 REQUEST_STREAM，这里即时签发、立即消费。
-      await ensureOffscreen();
-      if (stale()) { sendResponse({}); return; }
-
-      const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
-      const punctPref = (await chrome.storage.local.get('tmspeech_use_punct'))['tmspeech_use_punct'];
-      const prefs = ((await chrome.storage.local.get('tmspeech_prefs'))['tmspeech_prefs'] as any) || {};
-      if (stale()) { sendResponse({}); return; }
-      const initMsg: any = { type: 'INIT_OFFSCREEN', tabId: msg.tabId, source, lang, usePunct: punctPref !== false };
-      if (prefs.endpointRule1) initMsg.endpointRule1 = prefs.endpointRule1;
-      if (prefs.endpointRule2) initMsg.endpointRule2 = prefs.endpointRule2;
-      if (prefs.endpointRule3) initMsg.endpointRule3 = prefs.endpointRule3;
-      // 实时翻译开关/方向随 INIT 下发（offscreen 无 chrome.storage 访问权，由 bg 转发）
-      initMsg.translationEnabled = prefs.translationEnabled === true;
-      const tdir = prefs.translationDirection;
-      initMsg.translationDirection = tdir === 'zh-en' || tdir === 'en-zh' ? tdir : 'auto';
-      initMsg.translationTiming = prefs.translationTiming === 'final' ? 'final' : 'stream';
-      // 热词随 INIT 下发：offscreen 建 recognizer 时一次性烘焙进配置
-      const hotwords = (await chrome.storage.local.get('tmspeech_hotwords'))['tmspeech_hotwords'];
-      if (Array.isArray(hotwords) && hotwords.length) initMsg.hotwords = hotwords;
-      if (offscreenPort) {
-        offscreenPort.postMessage(initMsg);
-      } else {
-        await chrome.storage.session.set({ [PENDING_KEY]: initMsg });
-        if (stale()) {
-          // 坑：pending 快照是给"下一个连上的 offscreen 文档"的投递队列——START 已被
-          // 作废时必须删掉它，否则下次无关的端口连接会把过期 INIT 投递出去（幽灵启动）。
-          chrome.storage.session.remove(PENDING_KEY).catch(() => {});
-          sendResponse({});
-          return;
-        }
-      }
-
-      sendResponse({});
-    })().catch((e) => {
-      sendToPopup({ type: 'ERROR', message: `启动失败: ${e}` });
-      cleanupAll();
-      sendResponse({});
-    });
-
+    // 启动体已抽成独立函数（startRecognition）：tab/system/mic 三态共用同一套
+    // 竞态防护（代次核对、旧文档释放等待、pending 投递队列），此处只做通道收口。
+    startRecognition(msg, () => sendResponse({}));
     return true;
   }
 
@@ -676,13 +734,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-// 悬浮窗被用户关闭：system 模式下它是唯一显示端兼控制器——关闭即视为结束会话，
-// 触发统一清理（关 offscreen、停采集）；tab 模式下窗口本就不存在，走不到这里。
+// 悬浮窗被用户关闭：system/mic 模式下它是唯一显示端（mic 模式还兼任采集端）——
+// 关闭即视为结束会话，触发统一清理（关 offscreen、停采集）；tab 模式走不到这里。
 chrome.windows.onRemoved.addListener((closedWinId) => {
   if (closedWinId === floatingWinId) {
     floatingWinId = null;
     floatingPort = null;
-    if (sessionSource === 'system' && pipelineStatus === 'Running') {
+    if (sessionSource !== 'tab' && pipelineStatus === 'Running') {
       console.log('[TM BG] 悬浮字幕窗已关闭，自动停止识别');
       cleanupAll();
     }

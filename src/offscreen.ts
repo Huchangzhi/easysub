@@ -38,9 +38,10 @@ let port: chrome.runtime.Port;
 let reconnectTabId: number | null = null;
 let reconnectStreamId: string | null = null;
 // 音频来源：'tab'=标签页捕获（tabCapture 签发 streamId）｜'system'=系统音频
-// （getDisplayMedia 选择器授权，桌面采集音频环回，见 startSystemAudioCapture）。
+// （getDisplayMedia 选择器授权，桌面采集音频环回，见 acquireSystemAudioStream）｜
+// 'mic'=麦克风（音频轨在悬浮窗采集，PCM 经 bg 以 MIC_CHUNK 转发进来）。
 // INIT 时由 background 随消息带来，贯穿 REQUEST_STREAM/RECONNECT 全链路。
-let reconnectSource: 'tab' | 'system' = 'tab';
+let reconnectSource: 'tab' | 'system' | 'mic' = 'tab';
 let currentLang = 'zh_CN';
 let lastText = '';
 let prevSentence = '';
@@ -375,7 +376,7 @@ function stopAudio() {
 
 async function startAudioCapture(streamId: string) {
   // tab 模式：tabCapture 在 SW 侧签发 streamId，这里消费。system 模式不走此函数
-  // （无 streamId 可用，见 startSystemAudioCapture）。
+  // （无 streamId 可用，见 acquireSystemAudioStream）。
   const constraints: any = {
     audio: {
       mandatory: {
@@ -398,23 +399,33 @@ async function startAudioCapture(streamId: string) {
   await pipeCaptureStream(stream, 'tab');
 }
 
+// 坑：会话代次。INIT/STOP 各递增一次，用于作废在途的异步初始化：
+// system 模式下权限弹窗与模型加载之间可能隔着任意长的用户操作时间，
+// 期间会话若被停止或重启，旧闭包不得再把音频接进新会话。
+let sessionEpoch = 0;
+
 // 系统音频（整机环回）：MV3 的 desktopCapture 两条路都被 Chrome 堵死——SW 里调用
 // 强制要求 targetTab（crbug 41493089），其 streamId 又官方确认无法在 offscreen 文档
 // 消费（crbug 326509126）。唯一可行组合就是 offscreen 文档内直接 getDisplayMedia：
 // 选择器本身即授权（用户勾「分享系统音频」），无 OS 级权限弹窗、无 streamId 传递。
-async function startSystemAudioCapture() {
+// 只取音频轨返回，不接管道——调用方决定何时开始喂音频。
+async function acquireSystemAudioStream(): Promise<MediaStream> {
   const media = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
   // 只要音频轨；视频轨停掉——系统环回音频独立于屏幕画面，停视频不影响。
   media.getVideoTracks().forEach((t) => t.stop());
   const audio = media.getAudioTracks()[0];
   if (!audio) throw new Error('未获取到系统音频轨道');
-  await pipeCaptureStream(new MediaStream([audio]), 'system');
+  return new MediaStream([audio]);
 }
 
-async function pipeCaptureStream(stream: MediaStream, source: 'tab' | 'system') {
+// 麦克风：Chrome 禁止 offscreen 文档做 getUserMedia 音频采集（NotAllowedError），
+// 音频轨由悬浮字幕窗（可见扩展页）采集，PCM 块经 bg 以 MIC_CHUNK 转发进来直接喂管道。
+
+async function pipeCaptureStream(stream: MediaStream, source: 'tab' | 'system' | 'mic') {
   captureStream = stream;
   // 坑：tab 模式必须建 <audio> 回放——被捕获标签页的声音经捕获流转发，不回放就是静音；
-  // system 模式是系统环回（loopback），原声照常出扬声器，回放反而造成回声，绝不能开。
+  // system 模式是系统环回（loopback），原声照常出扬声器，回放反而造成回声，绝不能开；
+  // mic 模式同理——回放麦克风=外放回声啸叫，也绝不能开。
   if (source === 'tab') {
     audioEl = document.createElement('audio');
     audioEl.srcObject = stream;
@@ -529,9 +540,11 @@ function setupPort() {
       // ponytail: INIT_OFFSCREEN 可能触发两次（重连），__recognizer/__punctuator 只创建一次
       // ponytail: WASM 无法二次加载模型，重建 recognizer 需重启整个 offscreen 文档
       log('收到 INIT_OFFSCREEN');
+      sessionEpoch++;
+      const epoch = sessionEpoch;
       reconnectTabId = msg.tabId || null;
       reconnectStreamId = msg.streamId || null;
-      reconnectSource = msg.source === 'system' ? 'system' : 'tab';
+      reconnectSource = msg.source === 'system' ? 'system' : msg.source === 'mic' ? 'mic' : 'tab';
       if (msg.lang) currentLang = msg.lang;
       usePunct = msg.usePunct !== false;
 
@@ -621,6 +634,35 @@ function setupPort() {
 
       (async () => {
         try {
+        // system 模式：先弹 getDisplayMedia 选择器拿权限、拿到音频，再加载模型。
+        // 旧顺序是模型就绪后才弹窗，用户对着"已运行却没字幕"干等模型加载完才见弹窗，
+        // 割裂难用；取消选择时还会白白加载一遍模型。tab 模式不动：streamId 有效期短，
+        // 必须模型就绪后现签现用（见下方注释），无法提前。mic 模式音频从悬浮窗经
+        // MIC_CHUNK 流入，本文档无需预拿。
+        let preStream: MediaStream | null = null;
+        if (reconnectSource === 'system') {
+          try {
+            preStream = await acquireSystemAudioStream();
+          } catch (e: any) {
+            log('系统音频捕获失败或已取消: ' + (e?.message || e));
+            // 用户关掉选择器：NotAllowedError/AbortError 都算主动取消，报统一文案
+            const cancelled = e?.name === 'NotAllowedError' || e?.name === 'AbortError';
+            sendSafe('FW_POP', {
+              type: 'ERROR',
+              message: cancelled ? tSync(currentLang, 'pickerCancelled') : `系统音频捕获失败: ${e?.message || e}`,
+            });
+            // 采集根本没起来，bg/popup 留在 Running 就是幽灵会话：令 bg 走统一清理
+            // （关 offscreen 文档与悬浮窗、状态落定 Stopped）。tab 模式无此需要——
+            // 它的失败由 handleRequestStream 的 catch 负责 cleanupAll。
+            sendSafe('FW_STOP', {});
+            return;
+          }
+          // 授权期间会话已被停止/重启：把刚拿到的轨道关掉，作废本闭包
+          if (epoch !== sessionEpoch) {
+            preStream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+        }
         await waitForWasm();
         if (!(window as any).__recognizer) {
           const r1 = msg.endpointRule1 ?? 0.8;
@@ -677,6 +719,12 @@ function setupPort() {
             log('标点模型初始化失败: ' + e);
           }
         }
+        // 模型加载期间会话被停止/重启：作废本闭包，不再触碰 pipeline。
+        // preStream 必须一并释放，否则拿到的系统音频轨会一直挂着（麦克风/屏幕共享指示灯不灭）。
+        if (epoch !== sessionEpoch) {
+          preStream?.getTracks().forEach((t) => t.stop());
+          return;
+        }
         const waitingText = tSync(currentLang, 'waiting');
         sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: waitingText });
         sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: waitingText });
@@ -685,20 +733,26 @@ function setupPort() {
         // 向 background 要一个全新的 streamId 并立即开流。旧实现"启动时预签发、
         // 模型加载完才消费"，时间窗一长就会报 "Error starting tab capture"。
         // system 模式没有 streamId 可用（desktopCapture 无法跨进 offscreen，见
-        // startSystemAudioCapture 注释）：就绪后直接弹 getDisplayMedia 选择器。
-        if (reconnectSource === 'system') {
-          startSystemAudioCapture().catch((e: any) => {
-            log('系统音频捕获失败或已取消: ' + (e?.message || e));
-            // 用户关掉选择器：NotAllowedError/AbortError 都算主动取消，报统一文案
-            const cancelled = e?.name === 'NotAllowedError' || e?.name === 'AbortError';
-            sendSafe('FW_POP', {
-              type: 'ERROR',
-              message: cancelled ? tSync(currentLang, 'pickerCancelled') : `系统音频捕获失败: ${e?.message || e}`,
-            });
-          });
-        } else {
+        // acquireSystemAudioStream 注释）：授权阶段已拿到音频，此刻直接接入管道开喂。
+        if (reconnectSource === 'tab') {
           sendSafe('FW_POP', { type: 'REQUEST_STREAM', tabId: reconnectTabId, source: 'tab' });
+        } else if (reconnectSource === 'system') {
+          if (!preStream || epoch !== sessionEpoch) {
+            preStream?.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          try {
+            await pipeCaptureStream(preStream, 'system');
+          } catch (e: any) {
+            // 管道搭建失败（AudioWorklet 双路皆挂）：音频进不来，必须终结会话而非空挂 Running
+            log('系统音频接入管道失败: ' + (e?.message || e));
+            preStream.getTracks().forEach((t) => t.stop());
+            sendSafe('FW_POP', { type: 'ERROR', message: `系统音频接入失败: ${e?.message || e}` });
+            sendSafe('FW_STOP', {});
+            return;
+          }
         }
+        // mic：什么都不做——悬浮窗采集的 PCM 会以 MIC_CHUNK 消息持续流入（见下方处理器）
         } catch (e: any) { log('INIT_OFFSCREEN async 异常: ' + await describeWasmException(e)); throw e; }
       })().catch(async (e) => {
         log('Pipeline start 异常: ' + await describeWasmException(e));
@@ -730,9 +784,25 @@ function setupPort() {
       });
     }
 
+    if (msg.type === 'MIC_CHUNK') {
+      // mic 模式音频入口：悬浮窗（可见扩展页）采集 PCM，经 bg 逐块转发至此。
+      // 坑：Port 走 JSON 克隆，ArrayBuffer 到这里已变成普通数组（见 floating.ts 注释），
+      // 故这里按 number[] 还原；同时兼容直传 ArrayBuffer 的情形。
+      // pipeline 为空（已停止/重启间隙）直接丢弃，不报错。
+      if (!msg.audio || !pipeline) return;
+      const buf = Array.isArray(msg.audio)
+        ? Float32Array.from(msg.audio as number[])
+        : new Float32Array(msg.audio);
+      if (!buf.length) return;
+      recordLevel(buf);
+      const sr = msg.sampleRate || 16000;
+      pipeline.feedAudio(sr === 16000 ? buf : resample(buf, sr, 16000));
+      return;
+    }
+
     if (msg.type === 'STREAM_READY') {
       // background 对 REQUEST_STREAM 的应答：拿到新鲜 streamId，立即开流。
-      // 仅 tab 模式会收到（system 模式走 startSystemAudioCapture，无此消息）。
+      // 仅 tab 模式会收到（system 模式走 acquireSystemAudioStream，无此消息）。
       if (!pipeline) { log('STREAM_READY 到达时会话已停止，丢弃'); return; }
       log('收到 STREAM_READY，开始音频捕获');
       reconnectStreamId = msg.streamId || null;
@@ -746,6 +816,7 @@ function setupPort() {
 
     if (msg.type === 'STOP_OFFSCREEN') {
       log('收到 STOP_OFFSCREEN');
+      sessionEpoch++;
       reconnectTabId = null;
       reconnectStreamId = null;
       stopAudio();
