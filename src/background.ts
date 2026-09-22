@@ -2,7 +2,8 @@ import { t } from './i18n';
 const PENDING_KEY = 'pendingInit';
 // offscreen 文档"当前装的是哪套识别配置"的指纹（见 startRecognition 的复用判定）。
 // 识别配置（语言/标点/端点阈值/热词）在 createOnlineRecognizer 时一次性烘焙进 WASM，
-// 所以配置一致才能复用常驻文档；不一致必须重建，否则用户改了热词/阈值却不生效。
+// 只有配置一致才允许复用残留文档；不一致必须重建，否则用户改了热词/阈值却不生效。
+// 正常流程下停止即销毁文档（见 cleanupAll），此指纹只服务于崩溃残留等异常场景的复用判定。
 const OFFSCREEN_CFG_KEY = 'offscreenCfgKey';
 // 坑：会话核心状态全是下面的 SW 内存全局变量，service worker 空闲约 30 秒即被杀、全部归零。
 // 不在 storage.session 里留一份跨重启快照的话，"SW 已死期间用户关掉了被捕获标签页"
@@ -34,8 +35,8 @@ let sessionStartedAt = 0;
 let overlayLocked = false;
 let offscreenPort: chrome.runtime.Port | null = null;
 // 本 SW 生命周期内的配置指纹镜像（与 storage.session 的 OFFSCREEN_CFG_KEY 同步）。
-// 用于同步判断"当前 offscreen 文档是会话用的常驻文档"，避免"测试翻译"结束时的
-// closeDocument 把常驻文档（连同已加载的模型）误杀，导致下次"开始"重新载模型。
+// 用于同步判断"当前 offscreen 文档是不是正在跑的会话文档"，避免"测试翻译"结束时
+// 的 closeDocument 把正在识别的文档（连同已加载的模型）误杀。
 let offscreenCfgKeyInMem: string | null = null;
 let reconnectTimer: any = null;
 // 坑：START_RECOGNITION 的异步体里有多个 await 点（closeDocument、轮询等最长可拖 1.5s+），
@@ -235,8 +236,8 @@ chrome.runtime.onConnect.addListener((port) => {
       const cb = translateTestResolvers[p.id];
       delete translateTestResolvers[p.id];
       if (cb) cb({ ok: p.ok, text: p.text, error: p.error, debug: p.debug });
-      // 测试是临时拉的 offscreen。只有当前没有识别会话、且这个文档不是"会话用的常驻文档"
-      // 时才回收它——常驻文档里装着已加载的 WASM/模型，误杀会让下次"开始"重新载 357MB 模型。
+      // 测试是临时拉的 offscreen。只有当前没有识别会话、且这个文档不是正在跑会话的文档
+      // 时才回收它——会话文档里装着已加载的 WASM/模型，误杀会立刻中断正在进行的识别。
       if (pipelineStatus !== 'Running' && !offscreenCfgKeyInMem) {
         chrome.offscreen.closeDocument().catch(() => {});
       }
@@ -448,24 +449,21 @@ function cleanupAll() {
   pipelineStatus = 'Stopped';
   hideOverlay(tabId);
   chrome.storage.session.remove(PENDING_KEY);
-  // 停止的双路径保证（见下），端口还在就优雅停机。
+  // 停止即回收（2026-09-22 用户决策，恢复旧行为）：会话结束**无条件**销毁 offscreen 文档。
+  // 模型（__recognizer + WASM 堆，full 版 400MB+）活在文档里，只有销毁文档才能把内存
+  // 真正还回去。曾试过"常驻复用"换下次秒开，因停止后内存一直被占，已按用户要求回退。
+  // 代价：下次"开始"要重新从 IndexedDB 读模型 + WASM 解析（数秒 CPU/内存峰值，即
+  // "启动时主页面卡"的来源）。STOP_OFFSCREEN 仍先发（端口活着的话）：让 offscreen 先
+  // 停音频、清 60ms flush 定时器、pipeline.stop()；随后 closeDocument 无条件兜底——
+  // 冷启动 SW 场景端口不可达，销毁文档是停止必然生效的唯一硬保证。
   if (offscreenPort) {
     try { offscreenPort.postMessage({ type: 'STOP_OFFSCREEN' }); } catch {}
-  } else {
-    // 坑：offscreen 文档不再无条件销毁。它承载着 357MB 模型（__recognizer 缓存在文档的
-    // window 上），每次会话都重建就等于每次"开始"都要重新从 IndexedDB 读模型 + WASM 解析，
-    // 多花数秒的 CPU/内存峰值 —— 用户可感知为"启动时主页面卡住"。改为常驻复用（见 startRecognition）。
-    // 停机保证改由两条互补路径承担：
-    //   ① 端口还活着 → 上面的 STOP_OFFSCREEN 优雅停机，offscreen 会停音频、清 60ms flush
-    //      定时器、pipeline.stop()，采集必然停止；
-    //   ② 端口不可达（SW 冷启动、文档成孤儿）→ 这是唯一无法通过端口收敛的情形，销毁文档。
-    chrome.offscreen.closeDocument().catch(() => {});
-    chrome.storage.session.remove(OFFSCREEN_CFG_KEY).catch(() => {});
-    offscreenCfgKeyInMem = null;
   }
-  // 坑：offscreenPort 句柄**不能**在这里置空——它是"端口是否还连着"的活跃性标记。
-  // 置空而端口实际未断开，会让下次 START 的复用判定误以为连不上而被迫重建文档，
-  // 常驻带来的秒开收益直接归零。真正的断开由 port.onDisconnect 负责置空。
+  chrome.offscreen.closeDocument().catch(() => {});
+  chrome.storage.session.remove(OFFSCREEN_CFG_KEY).catch(() => {});
+  offscreenCfgKeyInMem = null;
+  // offscreenPort 不在这里手动置空：closeDocument 触发的 port.onDisconnect 会负责清它，
+  // 手动提前置空反而可能与"STOP 消息还在路上"的窗口竞争。
   captureTabId = null;
   // 重试一次，防止 content script 未就绪
   if (tabId) setTimeout(() => hideOverlay(tabId), 300);
@@ -532,12 +530,12 @@ async function startRecognition(msg: any, respond: () => void) {
     // 否则就是"用户已停止但采集继续"的幽灵会话。
     const myEpoch = ++sessionEpoch;
     const stale = () => myEpoch !== sessionEpoch;
-    // 坑：PENDING_KEY 要在这里就先清掉。下面复用常驻文档时会有"等端口重连"的窗口，
+    // 坑：PENDING_KEY 要在这里就先清掉。下面复用残留文档时会有"等端口重连"的窗口，
     // 期间端口一连上就会触发 checkPendingInit，把上一轮遗留的过期 INIT 投递出去
     // （幽灵启动：参数是旧会话的，pipeline 却为新会话跑起来）。先清后等。
     chrome.storage.session.remove(PENDING_KEY);
 
-    // 先取本次会话的识别配置。它决定能否复用常驻 offscreen 文档：语言 / 标点 / 端点阈值 /
+    // 先取本次会话的识别配置。它决定能否复用残留的 offscreen 文档：语言 / 标点 / 端点阈值 /
     // 热词都在 createOnlineRecognizer 时一次性烘焙进 WASM 配置，配置一致才能复用；
     // 不一致必须重建文档，否则用户改了热词或端点阈值会"看起来没生效"。
     const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
@@ -553,10 +551,10 @@ async function startRecognition(msg: any, respond: () => void) {
       sessionHotwords,
     ]);
 
-    // 文档复用判定：文档在 + 配置未变 → 复用。这是"启动时页面卡顿"的关键修复——
-    // 此前每次 START 都无条件 closeDocument，等于每次"开始"都要重新从 IndexedDB 读
-    // 357MB 模型并让 WASM 重新解析一次（数秒 CPU/内存峰值，整机都会掉帧）；
-    // 复用后 WASM 与 __recognizer 常驻，第二次起近乎秒开。
+    // 文档复用判定：文档在 + 配置未变 → 复用。正常流程下停止时文档已销毁（见 cleanupAll），
+    // hasDocument() 恒为 false，每次"开始"都会重新载模型（数秒 CPU/内存峰值，用户已接受
+    // 该代价换停止后内存归还）；本分支只覆盖崩溃残留等异常场景——文档还活着且配置没变时
+    // 直接复用，省一次无意义的重建。
     let reuseDoc = false;
     if (await chrome.offscreen.hasDocument()) {
       const storedKey = (await chrome.storage.session.get(OFFSCREEN_CFG_KEY))[OFFSCREEN_CFG_KEY];

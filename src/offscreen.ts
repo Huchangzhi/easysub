@@ -619,11 +619,9 @@ function setupPort() {
     setTimeout(() => {
       // 竞态守卫：期间若已建立更新的端口（另一次重连已成功），不重复建连。
       if (port !== myPort) return;
-      // 坑：此前只在 pipeline 还在跑时才重连。offscreen 文档改为常驻（避免每次"开始"
-      // 都重载 357MB 模型导致页面卡顿）之后，"停机后端口断开"成了常态——那时若不重连，
-      // 文档就再也没有通道能被 INIT/STOP 触达，background 只能销毁重建文档，
-      // 常驻带来的秒开收益全部失效。改为无条件重连，仅在确实在跑时补发 RECONNECT
-      // 让 background 自愈会话状态。
+      // 无条件重连：运行中 SW 被回收断开时，重连 + RECONNECT 让 background 自愈会话状态；
+      // 停止时 background 会立刻销毁本文档，这段代码大概率没机会执行——即便在销毁完成前
+      // 抢跑重连一次，也只是空连一秒后随文档一起消亡，无副作用。
       setupPort();
       if (wasRunning) {
         sendSafe('FW_POP', { type: 'RECONNECT', tabId: reconnectTabId, streamId: reconnectStreamId, source: reconnectSource, status: 'Running' });
@@ -737,8 +735,9 @@ function setupPort() {
         // 必须模型就绪后现签现用（见下方注释），无法提前。mic 模式音频从悬浮窗经
         // MIC_CHUNK 流入，本文档无需预拿。
         let preStream: MediaStream | null = null;
-        // 模型是否真的要加载。常驻文档复用后 __wasmReady/__recognizer/__punctuator 都已存在，
-        // 这时不能再提示"正在加载模型"——旧实现的提示与真实状态无关，是错乱来源之一。
+        // 模型是否真的要加载。文档是全新加载时 __wasmReady/__recognizer/__punctuator 均不存在；
+        // 崩溃残留文档被复用时它们可能已在——这时不能再提示"正在加载模型"，
+        // 否则提示与真实状态无关，又是错乱来源。
         const needLoadModel = !(window as any).__wasmReady
           || !(window as any).__recognizer
           || (usePunct && !(window as any).__punctuator);
@@ -939,9 +938,9 @@ function setupPort() {
       // 字幕重新写回缓存并推给 content/popup，表现为"点了停止字幕又复活"。
       punctPending = false;
       punctEpoch++;
-      // 坑：文档现在常驻复用（避免每次开始都重载模型），所以会话文本状态必须在这里
-      // 显式清零——否则下一场会话开头会闪出上一场的残留字幕（RESEND_CURRENT_TEXT
-      // 也会把旧句重新播一遍）。
+      // 坑：STOP 到达与 background 销毁本文档之间存在窗口（closeDocument 异步生效），
+      // 期间 RESEND_CURRENT_TEXT / 迟到的标点回调仍可能把上一场的旧句推上屏；
+      // 显式清零会话文本状态，保证任何时点看到的都是"已停止"该有的空白。
       lastText = '';
       prevSentence = '';
       lastPunctText = '';
