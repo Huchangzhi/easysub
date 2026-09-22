@@ -364,6 +364,23 @@ function sendSafe(type: string, payload: any) {
   try { port.postMessage({ type, payload }); } catch {}
 }
 
+// 状态文案（"正在加载模型" / "正在等待音频" / "请选择要共享的屏幕"）走**独立通道**，
+// 不再借用 TEXT_CHANGED。坑：借字幕通道有三个坏处——
+//   ① 状态串被当成一句字幕写进字幕行，用户会看到"正在等待音频"作为字幕出现；
+//   ② 发送点与真实阶段脱钩。旧实现在流程的固定位置无条件发 waiting，不看音源、
+//      不看模型是否已就绪，于是"模型还在加载"时提示已经跳到"正在等待音频"（提示错乱）；
+//   ③ mic/system 模式下音频根本不由本方法获取，却同样收到"正在等待音频"。
+// 各音源的真实阶段顺序并不统一（tab：先加载模型后取权限；system/mic：先取权限后加载
+// 模型，见 INIT_OFFSCREEN 里 system 分支的注释），所以不做统一封装，
+// 由每个分支在**自己的真实转换点**调用。key 为空表示清除状态文案。
+function sendStatus(key: string) {
+  const payload = { type: 'STATUS_TEXT', key };
+  // 两个显示端各一条：FW_CT → 页面叠层 / 悬浮字幕窗；FW_POP → 面板状态栏。
+  // 面板侧落到 modelStatus，不再像旧实现那样被当成"当前字幕"塞进预览区。
+  sendSafe('FW_CT', payload);
+  sendSafe('FW_POP', payload);
+}
+
 function stopAudio() {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   if (workletNode) { workletNode.port.postMessage('stop'); workletNode.disconnect(); workletNode = null; }
@@ -422,7 +439,28 @@ async function acquireSystemAudioStream(): Promise<MediaStream> {
 // 音频轨由悬浮字幕窗（可见扩展页）采集，PCM 块经 bg 以 MIC_CHUNK 转发进来直接喂管道。
 
 async function pipeCaptureStream(stream: MediaStream, source: 'tab' | 'system' | 'mic') {
+  // 坑：换流前必须先释放上一份采集。INIT_OFFSCREEN 有两条投递路径（bg 的
+  // checkPendingInit 与直投），同一次启动可能触发两次，两条 async 链会各自走到这里 ——
+  // 不先停机就会出现两个 AudioContext 并存：旧的从不 close（Chrome 单文档 AudioContext
+  // 有数量上限，反复重连后 new AudioContext() 直接抛错、会话再也起不来），旧 worklet 的
+  // 输入仍连着、process() 仍被调用，但它的 flush 定时器已被覆盖清除 —— 缓冲只进不出，
+  // 约 192KB/s 无上限增长，长会话必 OOM。stopAudio() 一次性收敛 ctx/worklet/定时器/
+  // audioEl/旧 track，是这里唯一正确的顺序。
+  stopAudio();
   captureStream = stream;
+  // 坑：此前完全没有 track ended 检测。system 模式用户点"停止共享"、被捕获标签页被关闭、
+  // 音频设备拔出时，MediaStreamAudioSourceNode 只会输出静音 —— worklet 照常送全零帧，
+  // pipeline 保持 Running，界面"正常"但永远不会再出字幕，且没有任何错误提示
+  // （用户最难自查的一类卡死）。监听 ended 后统一上报 ERROR，
+  // 由 background 走 cleanupAll 收敛成一次可见的停止。
+  stream.getTracks().forEach((track) => {
+    // 注意：自己调 track.stop() 不会触发本事件，所以上面的 stopAudio() 不会误报。
+    track.addEventListener('ended', () => {
+      if (captureStream !== stream) return; // 已被更新的流替换（重连），忽略旧流的 ended
+      log('音频轨道已结束，上报停止');
+      sendSafe('FW_POP', { type: 'ERROR', message: tSync(currentLang, 'sourceEnded') });
+    });
+  });
   // 坑：tab 模式必须建 <audio> 回放——被捕获标签页的声音经捕获流转发，不回放就是静音；
   // system 模式是系统环回（loopback），原声照常出扬声器，回放反而造成回声，绝不能开；
   // mic 模式同理——回放麦克风=外放回声啸叫，也绝不能开。
@@ -445,23 +483,68 @@ async function pipeCaptureStream(stream: MediaStream, source: 'tab' | 'system' |
 
 async function startWorkletCapture(stream: MediaStream) {
   // ponytail: AudioWorklet 在独立音频线程持续读帧，主线程标点阻塞时照常缓冲
-  audioCtx = new AudioContext();
-  const source = audioCtx.createMediaStreamSource(stream);
+  const ctx = new AudioContext();
+  audioCtx = ctx;
+  const source = ctx.createMediaStreamSource(stream);
   const url = chrome.runtime.getURL('audio-worklet-processor.js');
   // ponytail: audioWorklet.addModule 必须用扩展 URL（blob 被 CSP 'self' 拦截）
-  await audioCtx.audioWorklet.addModule(url);
+  await ctx.audioWorklet.addModule(url);
+  // 坑：await 之后必须核对 audioCtx 是否仍是自己。await 期间可能已有更新的一次初始化
+  // 接管（见 pipeCaptureStream 开头关于重复初始化的说明）；继续往下就会在"已不是当前"
+  // 的 ctx 上建节点，而旧 ctx 无人 close —— AudioContext 泄漏 + 缓冲永不排空。
+  if (audioCtx !== ctx) { ctx.close().catch(() => {}); return; }
 
-  workletNode = new AudioWorkletNode(audioCtx, 'audio-buffer');
-  source.connect(workletNode);
+  const node = new AudioWorkletNode(ctx, 'audio-buffer');
+  workletNode = node;
+  source.connect(node);
+  // 坑：AudioWorkletNode 在"只有上游连接、自身不接下游"时 process() 是否仍被渲染图拉取，
+  // 依赖实现与版本细节（降级路径的 ScriptProcessorNode 就明确要求被下游拉取）。用 gain=0
+  // 桥接到 destination：链路保持活跃且完全静音，消除版本差异导致的
+  // "process() 不被调用 → 无音频、无字幕、无报错"这类静默故障。零成本，故无条件桥接。
+  const muteGain = ctx.createGain();
+  muteGain.gain.value = 0;
+  node.connect(muteGain);
+  muteGain.connect(ctx.destination);
 
-  workletNode.port.onmessage = (e: MessageEvent) => {
+  // 坑：offscreen 文档冷启动时可能没有用户激活，AudioContext 会以 suspended 启动；此时
+  // 渲染图不推进、worklet 永不回包 —— 同样是"无音频、无字幕、无报错，界面停在运行中"。
+  // 降级路径一直有 resume()，worklet 路径此前漏了。运行中被系统挂起（休眠、音频设备切换）
+  // 是同一类故障，所以 statechange 一并监听，把它变成一条用户可见的错误。
+  let everRunning = false;
+  ctx.onstatechange = () => {
+    if (audioCtx !== ctx) return;
+    log('AudioContext 状态: ' + ctx.state);
+    if (ctx.state === 'running') { everRunning = true; return; }
+    // 只在"确实跑起来过"之后把挂起当故障上报：初始 suspended 由下面的分支统一处理，
+    // 否则同一次启动会连报两条错误。
+    if (everRunning) {
+      everRunning = false;
+      sendSafe('FW_POP', { type: 'ERROR', message: `音频输出被系统挂起（${ctx.state}），识别已停止` });
+    }
+  };
+  if (ctx.state !== 'running') {
+    try { await ctx.resume(); } catch (e) { log('AudioContext resume 失败: ' + e); }
+  }
+  if (audioCtx !== ctx) { ctx.close().catch(() => {}); return; }
+  if (ctx.state !== 'running') {
+    log('AudioContext 未能进入 running: ' + ctx.state);
+    sendSafe('FW_POP', { type: 'ERROR', message: `音频输出未启动（AudioContext ${ctx.state}），请重新开始识别` });
+    return;
+  }
+
+  node.port.onmessage = (e: MessageEvent) => {
+    // 坑：旧采集链的迟到回包必须丢弃。否则被接管后旧 worklet 仍会把音频喂给当前
+    // pipeline（两份音频交错），表现为识别结果抖动/串音。
+    if (audioCtx !== ctx) return;
     if (e.data && e.data.audio) {
       const buf = new Float32Array(e.data.audio);
       if (buf.length > 0) {
         // 电平测量直接用本块帧数据算 RMS，必须在 feedAudio 之前（feedAudio 不改 buf，
         // 但保持"测量先于消费"的顺序可读性更好）；开销口径见 recordLevel 注释。
         recordLevel(buf);
-        const sr = e.data.sampleRate || audioCtx!.sampleRate;
+        // 坑：采样率取本地 ctx 而不是模块级 audioCtx!——后者在停机/接管后为 null，
+        // 会在迟到回包里抛未捕获 TypeError。
+        const sr = e.data.sampleRate || ctx.sampleRate;
         const arrivedAt = performance.now();
         pipeline?.feedAudio(sr === 16000 ? buf : resample(buf, sr, 16000));
         // 延迟测量：RTT 按"回包到达时刻 - flush 发出时刻"计（不含本块解码耗时，
@@ -474,10 +557,14 @@ async function startWorkletCapture(stream: MediaStream) {
 
   function scheduleFlush() {
     flushTimer = setTimeout(() => {
+      // 坑：本定时器链必须能自杀。stopAudio() 会 clearTimeout 停掉当前链，但若期间已有
+      // 更新的一次初始化接管（audioCtx 换人），这条旧链会被自己重新续上，导致两个 60ms
+      // 循环向同一节点重复发 flush（音频被切成碎片块）。每轮先核对代次再续。
+      if (audioCtx !== ctx) return;
       // 记录 flush 发出时刻供延迟测量使用（复用现有 60ms 路径，不新增定时器）。
       // 若上一轮回包因主线程阻塞迟到，此值被覆盖后 RTT 按最新发送计时——低估近似，可接受。
       lastFlushSentAt = performance.now();
-      workletNode?.port.postMessage('flush');
+      node.port.postMessage('flush');
       scheduleFlush();
     }, 60);
   }
@@ -522,19 +609,29 @@ function startFallbackCapture(stream: MediaStream) {
 }
 
 function setupPort() {
-  port = chrome.runtime.connect({ name: 'offscreen' });
+  const myPort = chrome.runtime.connect({ name: 'offscreen' });
+  port = myPort;
 
-  port.onDisconnect.addListener(() => {
+  myPort.onDisconnect.addListener(() => {
     console.log('[TM Offscreen] 端口断开');
-    if (!pipeline) return;
-    console.log('[TM Offscreen] 管道还在运行，1 秒后重连...');
+    const wasRunning = !!pipeline;
+    if (wasRunning) console.log('[TM Offscreen] 管道还在运行，1 秒后重连...');
     setTimeout(() => {
+      // 竞态守卫：期间若已建立更新的端口（另一次重连已成功），不重复建连。
+      if (port !== myPort) return;
+      // 坑：此前只在 pipeline 还在跑时才重连。offscreen 文档改为常驻（避免每次"开始"
+      // 都重载 357MB 模型导致页面卡顿）之后，"停机后端口断开"成了常态——那时若不重连，
+      // 文档就再也没有通道能被 INIT/STOP 触达，background 只能销毁重建文档，
+      // 常驻带来的秒开收益全部失效。改为无条件重连，仅在确实在跑时补发 RECONNECT
+      // 让 background 自愈会话状态。
       setupPort();
-      sendSafe('FW_POP', { type: 'RECONNECT', tabId: reconnectTabId, streamId: reconnectStreamId, source: reconnectSource, status: 'Running' });
+      if (wasRunning) {
+        sendSafe('FW_POP', { type: 'RECONNECT', tabId: reconnectTabId, streamId: reconnectStreamId, source: reconnectSource, status: 'Running' });
+      }
     }, 1000);
   });
 
-  port.onMessage.addListener((msg) => {
+  myPort.onMessage.addListener((msg) => {
     try {
     if (msg.type === 'INIT_OFFSCREEN') {
       // ponytail: INIT_OFFSCREEN 可能触发两次（重连），__recognizer/__punctuator 只创建一次
@@ -640,7 +737,15 @@ function setupPort() {
         // 必须模型就绪后现签现用（见下方注释），无法提前。mic 模式音频从悬浮窗经
         // MIC_CHUNK 流入，本文档无需预拿。
         let preStream: MediaStream | null = null;
+        // 模型是否真的要加载。常驻文档复用后 __wasmReady/__recognizer/__punctuator 都已存在，
+        // 这时不能再提示"正在加载模型"——旧实现的提示与真实状态无关，是错乱来源之一。
+        const needLoadModel = !(window as any).__wasmReady
+          || !(window as any).__recognizer
+          || (usePunct && !(window as any).__punctuator);
         if (reconnectSource === 'system') {
+          // system 先要权限：此刻既没在加载模型、也还没到"等音频"，两个旧文案都不对，
+          // 必须单列一条"请选择要共享的屏幕"，否则用户对着"正在加载模型"干等弹窗。
+          sendStatus('pickingScreen');
           try {
             preStream = await acquireSystemAudioStream();
           } catch (e: any) {
@@ -663,6 +768,9 @@ function setupPort() {
             return;
           }
         }
+        // 真正开始加载模型时才提示。tab 走到这里才开始要权限（"先加载后取权限"），
+        // system/mic 的权限已在上一步拿到（"先取权限后加载"）——顺序不同，提示点也不同。
+        if (needLoadModel) sendStatus('loadingModel');
         await waitForWasm();
         if (!(window as any).__recognizer) {
           const r1 = msg.endpointRule1 ?? 0.8;
@@ -725,9 +833,12 @@ function setupPort() {
           preStream?.getTracks().forEach((t) => t.stop());
           return;
         }
-        const waitingText = tSync(currentLang, 'waiting');
-        sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: waitingText });
-        sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: waitingText });
+        // 模型就绪后进入"取音频"阶段，但三种音源要的东西不同，提示不能一刀切：
+        //   tab    → 等 streamId 签发 + getUserMedia 开流（下面 REQUEST_STREAM），确实在等音频；
+        //   mic    → 等悬浮窗把 PCM 推起来，确实在等音频；
+        //   system → 音频在授权阶段就已在手，这里只是接入管道，再提示"正在等待音频"就是假的，
+        //            清掉上一条提示即可（随后就该出字了）。
+        sendStatus(reconnectSource === 'system' ? '' : 'waiting');
         await pipeline!.start();
         // 坑：capture streamId 有效期很短，必须在消费前一刻才签发。此刻 WASM/模型已就绪，
         // 向 background 要一个全新的 streamId 并立即开流。旧实现"启动时预签发、
@@ -828,6 +939,12 @@ function setupPort() {
       // 字幕重新写回缓存并推给 content/popup，表现为"点了停止字幕又复活"。
       punctPending = false;
       punctEpoch++;
+      // 坑：文档现在常驻复用（避免每次开始都重载模型），所以会话文本状态必须在这里
+      // 显式清零——否则下一场会话开头会闪出上一场的残留字幕（RESEND_CURRENT_TEXT
+      // 也会把旧句重新播一遍）。
+      lastText = '';
+      prevSentence = '';
+      lastPunctText = '';
       // 停止即归零电平包络并停发（pipeline 已置 null，recordLevel 的 Running 守卫兜底）。
       levelEnv = 0;
       lastLevelSentAt = 0;

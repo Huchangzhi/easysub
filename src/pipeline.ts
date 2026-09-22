@@ -76,8 +76,11 @@ export class Pipeline {
     if (!r) return;
 
     this.stream.acceptWaveform(16000, samples);
-    // ponytail: isReady 可能永不返回 false（极低概率），无迭代限制，阻塞主线程
-    while (r.isReady(this.stream)) {
+    // 坑：isReady 可能永不返回 false（极低概率），无迭代限制，阻塞主线程。
+    // 加迭代上限兜底：宁可这一帧少解一次，也不能让主线程永久卡在这里
+    // （主线程一卡，60ms flush 定时器停摆，AudioWorklet 缓冲只进不出）。
+    let guard = 0;
+    while (r.isReady(this.stream) && guard++ < 200) {
       r.decode(this.stream);
     }
 
@@ -87,14 +90,25 @@ export class Pipeline {
 
     if (clean && clean !== this.lastText) {
       this.lastText = clean;
-      this.events.onTextChanged(clean);
+      // 坑：显示回调必须兜住——它是同步跨进程/跨模块调用链（含 countTransform 等
+      // 会在此刻触发的下游逻辑），抛错会跳过下面整段端点判定，本帧字幕丢失。
+      try { this.events.onTextChanged(clean); } catch (e) { log('onTextChanged 异常: ' + e); }
     }
 
     if (isEndpoint && clean) {
       log('句完成: "' + clean + '"');
-      this.events.onSentenceDone(clean);
-      r.reset(this.stream);
-      this.lastText = '';
+      // 坑：onSentenceDone 里会同步跑 WASM 标点恢复（addPunct 的异常以裸指针形式抛出）。
+      // 若把它放在 r.reset() 之前且不做兜底，一次抛错就会跳过 reset —— 识别流永不重置，
+      // 端点反复触发、重复出句、或后续彻底不出句（会话看似 Running 却再也不产字幕）。
+      // finally 保证解码器状态无论如何都归零。
+      try {
+        this.events.onSentenceDone(clean);
+      } catch (e) {
+        log('onSentenceDone 异常: ' + e);
+      } finally {
+        r.reset(this.stream);
+        this.lastText = '';
+      }
     }
   }
 }

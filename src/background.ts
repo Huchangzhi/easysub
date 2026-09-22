@@ -1,5 +1,9 @@
 import { t } from './i18n';
 const PENDING_KEY = 'pendingInit';
+// offscreen 文档"当前装的是哪套识别配置"的指纹（见 startRecognition 的复用判定）。
+// 识别配置（语言/标点/端点阈值/热词）在 createOnlineRecognizer 时一次性烘焙进 WASM，
+// 所以配置一致才能复用常驻文档；不一致必须重建，否则用户改了热词/阈值却不生效。
+const OFFSCREEN_CFG_KEY = 'offscreenCfgKey';
 // 坑：会话核心状态全是下面的 SW 内存全局变量，service worker 空闲约 30 秒即被杀、全部归零。
 // 不在 storage.session 里留一份跨重启快照的话，"SW 已死期间用户关掉了被捕获标签页"
 // 这一窗口期内触发的事件将无人能识别（onRemoved 冷启动后内存里 tabId 是 null）。
@@ -29,6 +33,10 @@ let pipelineStatus = 'Stopped';
 let sessionStartedAt = 0;
 let overlayLocked = false;
 let offscreenPort: chrome.runtime.Port | null = null;
+// 本 SW 生命周期内的配置指纹镜像（与 storage.session 的 OFFSCREEN_CFG_KEY 同步）。
+// 用于同步判断"当前 offscreen 文档是会话用的常驻文档"，避免"测试翻译"结束时的
+// closeDocument 把常驻文档（连同已加载的模型）误杀，导致下次"开始"重新载模型。
+let offscreenCfgKeyInMem: string | null = null;
 let reconnectTimer: any = null;
 // 坑：START_RECOGNITION 的异步体里有多个 await 点（closeDocument、轮询等最长可拖 1.5s+），
 // 期间用户点 STOP 触发 cleanupAll 后，START 残余代码仍会继续执行：重置 Running、新建
@@ -227,8 +235,9 @@ chrome.runtime.onConnect.addListener((port) => {
       const cb = translateTestResolvers[p.id];
       delete translateTestResolvers[p.id];
       if (cb) cb({ ok: p.ok, text: p.text, error: p.error, debug: p.debug });
-      // 测试是临时拉的 offscreen：若当前无识别会话，出结果后立即关闭文档（连带回收翻译 worker）
-      if (pipelineStatus !== 'Running') {
+      // 测试是临时拉的 offscreen。只有当前没有识别会话、且这个文档不是"会话用的常驻文档"
+      // 时才回收它——常驻文档里装着已加载的 WASM/模型，误杀会让下次"开始"重新载 357MB 模型。
+      if (pipelineStatus !== 'Running' && !offscreenCfgKeyInMem) {
         chrome.offscreen.closeDocument().catch(() => {});
       }
       return;
@@ -331,7 +340,9 @@ chrome.runtime.onConnect.addListener((port) => {
             chrome.storage.local.get(LOCK_KEY).then(r => {
               sendToTab(id, { type: 'LOCK_TOGGLE', locked: r[LOCK_KEY] === true });
             }).catch(() => {});
-            (async () => { sendToTab(id, { type: 'TEXT_CHANGED', text: await t('waiting') }); })();
+            // 状态文案走 STATUS_TEXT 独立通道（见 offscreen.ts sendStatus 注释）：
+            // 借 TEXT_CHANGED 会把"正在等待音频"当成一句字幕写进字幕行。
+            sendToTab(id, { type: 'STATUS_TEXT', key: 'waiting' });
             chrome.storage.local.get('tmspeech_prefs').then(r => {
               const prefs = (r['tmspeech_prefs'] as any) || {};
               if (prefs.fontSize) sendToTab(id, { type: 'SET_FONT_SIZE', fontSize: prefs.fontSize });
@@ -359,9 +370,17 @@ chrome.runtime.onConnect.addListener((port) => {
     offscreenPort = null;
     if (pipelineStatus !== 'Running') return;
     console.log('[TM BG] offscreen 断开，等待重连...');
-    // ponytail: 3s 超时与 offscreen 重连竞争，offscreen 重连后 bg 已清理则不一致
+    // 坑：只判 pipelineStatus==='Running' 不够——"Running 状态下重启会话"（START 里
+    // 因配置变化而 closeDocument 重建）会在旧端口断开处武装本定时器，3 秒后把刚起来的
+    // 新会话按"后台页面意外关闭"清掉：表现为字幕突然消失 + 弹一条莫名其妙的错误。
+    // 用会话代次快照兜住：期间只要发生过 START/STOP（sessionEpoch 前进），本定时器即已过期。
+    const epochAtDisconnect = sessionEpoch;
     reconnectTimer = setTimeout(() => {
       if (pipelineStatus !== 'Running') return;
+      if (epochAtDisconnect !== sessionEpoch) {
+        console.log('[TM BG] 重连超时定时器已过期（期间发生过 Start/Stop），忽略');
+        return;
+      }
       console.log('[TM BG] 重连超时，清理');
       // 此路径不走 cleanupAll，但同样要作废在途的 START 异步体，防止超时清理被残余启动代码"复活"。
       sessionEpoch++;
@@ -429,13 +448,24 @@ function cleanupAll() {
   pipelineStatus = 'Stopped';
   hideOverlay(tabId);
   chrome.storage.session.remove(PENDING_KEY);
-  if (offscreenPort) offscreenPort.postMessage({ type: 'STOP_OFFSCREEN' });
-  // 坑：SW 冷启动场景下 offscreenPort 为 null，上面的 STOP_OFFSCREEN 根本发不出去；
-  // 但 closeDocument 是无条件执行的——offscreen 文档销毁后 AudioWorklet、60ms flush
-  // 定时器、pipeline 全部随之消亡，这是"停止"最终一定生效的硬保证。
-  // STOP_OFFSCREEN 只是端口还活着时的优雅停机快路径，二者缺一不可。
-  chrome.offscreen.closeDocument().catch(() => {});
-  offscreenPort = null;
+  // 停止的双路径保证（见下），端口还在就优雅停机。
+  if (offscreenPort) {
+    try { offscreenPort.postMessage({ type: 'STOP_OFFSCREEN' }); } catch {}
+  } else {
+    // 坑：offscreen 文档不再无条件销毁。它承载着 357MB 模型（__recognizer 缓存在文档的
+    // window 上），每次会话都重建就等于每次"开始"都要重新从 IndexedDB 读模型 + WASM 解析，
+    // 多花数秒的 CPU/内存峰值 —— 用户可感知为"启动时主页面卡住"。改为常驻复用（见 startRecognition）。
+    // 停机保证改由两条互补路径承担：
+    //   ① 端口还活着 → 上面的 STOP_OFFSCREEN 优雅停机，offscreen 会停音频、清 60ms flush
+    //      定时器、pipeline.stop()，采集必然停止；
+    //   ② 端口不可达（SW 冷启动、文档成孤儿）→ 这是唯一无法通过端口收敛的情形，销毁文档。
+    chrome.offscreen.closeDocument().catch(() => {});
+    chrome.storage.session.remove(OFFSCREEN_CFG_KEY).catch(() => {});
+    offscreenCfgKeyInMem = null;
+  }
+  // 坑：offscreenPort 句柄**不能**在这里置空——它是"端口是否还连着"的活跃性标记。
+  // 置空而端口实际未断开，会让下次 START 的复用判定误以为连不上而被迫重建文档，
+  // 常驻带来的秒开收益直接归零。真正的断开由 port.onDisconnect 负责置空。
   captureTabId = null;
   // 重试一次，防止 content script 未就绪
   if (tabId) setTimeout(() => hideOverlay(tabId), 300);
@@ -502,17 +532,61 @@ async function startRecognition(msg: any, respond: () => void) {
     // 否则就是"用户已停止但采集继续"的幽灵会话。
     const myEpoch = ++sessionEpoch;
     const stale = () => myEpoch !== sessionEpoch;
-    await chrome.offscreen.closeDocument().catch(() => {});
-    if (stale()) { respond(); return; }
-    // closeDocument 会触发 onDisconnect 置空 offscreenPort
-    // 等旧文档真正消失（上限 1.5s）再继续，给 Chrome 时间异步释放旧 capture 流
-    const releaseDeadline = Date.now() + 1500;
-    while (await chrome.offscreen.hasDocument()) {
-      if (Date.now() > releaseDeadline) break; // 极端情况下放行，让后续错误正常暴露
-      await new Promise(r => setTimeout(r, 50));
-      if (stale()) { respond(); return; }
-    }
+    // 坑：PENDING_KEY 要在这里就先清掉。下面复用常驻文档时会有"等端口重连"的窗口，
+    // 期间端口一连上就会触发 checkPendingInit，把上一轮遗留的过期 INIT 投递出去
+    // （幽灵启动：参数是旧会话的，pipeline 却为新会话跑起来）。先清后等。
     chrome.storage.session.remove(PENDING_KEY);
+
+    // 先取本次会话的识别配置。它决定能否复用常驻 offscreen 文档：语言 / 标点 / 端点阈值 /
+    // 热词都在 createOnlineRecognizer 时一次性烘焙进 WASM 配置，配置一致才能复用；
+    // 不一致必须重建文档，否则用户改了热词或端点阈值会"看起来没生效"。
+    const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
+    const punctPref = (await chrome.storage.local.get('tmspeech_use_punct'))['tmspeech_use_punct'];
+    const prefs = ((await chrome.storage.local.get('tmspeech_prefs'))['tmspeech_prefs'] as any) || {};
+    const hotwords = (await chrome.storage.local.get('tmspeech_hotwords'))['tmspeech_hotwords'];
+    if (stale()) { respond(); return; }
+    const usePunct = punctPref !== false;
+    const sessionHotwords = Array.isArray(hotwords) && hotwords.length ? hotwords : null;
+    const cfgKey = JSON.stringify([
+      lang, usePunct,
+      prefs.endpointRule1 ?? null, prefs.endpointRule2 ?? null, prefs.endpointRule3 ?? null,
+      sessionHotwords,
+    ]);
+
+    // 文档复用判定：文档在 + 配置未变 → 复用。这是"启动时页面卡顿"的关键修复——
+    // 此前每次 START 都无条件 closeDocument，等于每次"开始"都要重新从 IndexedDB 读
+    // 357MB 模型并让 WASM 重新解析一次（数秒 CPU/内存峰值，整机都会掉帧）；
+    // 复用后 WASM 与 __recognizer 常驻，第二次起近乎秒开。
+    let reuseDoc = false;
+    if (await chrome.offscreen.hasDocument()) {
+      const storedKey = (await chrome.storage.session.get(OFFSCREEN_CFG_KEY))[OFFSCREEN_CFG_KEY];
+      reuseDoc = storedKey === cfgKey;
+    }
+    if (stale()) { respond(); return; }
+    if (reuseDoc && !offscreenPort) {
+      // 端口可能在 SW 冷启动或停机后断开：offscreen 侧有 1s 重连策略，等它连上（上限 1.5s）
+      const portDeadline = Date.now() + 1500;
+      while (!offscreenPort && Date.now() < portDeadline) {
+        await new Promise(r => setTimeout(r, 50));
+        if (stale()) { respond(); return; }
+      }
+      if (!offscreenPort) reuseDoc = false; // 连不上 → 降级为重建，避免 INIT 投递不进去的静默失败
+    }
+    if (!reuseDoc) {
+      await chrome.offscreen.closeDocument().catch(() => {});
+      if (stale()) { respond(); return; }
+      // closeDocument 会触发 onDisconnect 置空 offscreenPort
+      // 等旧文档真正消失（上限 1.5s）再继续，给 Chrome 时间异步释放旧 capture 流
+      const releaseDeadline = Date.now() + 1500;
+      while (await chrome.offscreen.hasDocument()) {
+        if (Date.now() > releaseDeadline) break; // 极端情况下放行，让后续错误正常暴露
+        await new Promise(r => setTimeout(r, 50));
+        if (stale()) { respond(); return; }
+      }
+      // 记住这套配置：下次 START 配置一致就直接复用文档，跳过整段重建
+      chrome.storage.session.set({ [OFFSCREEN_CFG_KEY]: cfgKey }).catch(() => {});
+    }
+    offscreenCfgKeyInMem = cfgKey;
     if (stale()) { respond(); return; }
 
     pipelineStatus = 'Running';
@@ -569,11 +643,8 @@ async function startRecognition(msg: any, respond: () => void) {
     await ensureOffscreen();
     if (stale()) { respond(); return; }
 
-    const lang = (await chrome.storage.local.get('tmspeech_lang'))['tmspeech_lang'] || 'zh_CN';
-    const punctPref = (await chrome.storage.local.get('tmspeech_use_punct'))['tmspeech_use_punct'];
-    const prefs = ((await chrome.storage.local.get('tmspeech_prefs'))['tmspeech_prefs'] as any) || {};
-    if (stale()) { respond(); return; }
-    const initMsg: any = { type: 'INIT_OFFSCREEN', tabId: msg.tabId, source, lang, usePunct: punctPref !== false };
+    // 配置在上面已读过（复用判定要用），这里只组装消息，不再重复读 storage
+    const initMsg: any = { type: 'INIT_OFFSCREEN', tabId: msg.tabId, source, lang, usePunct };
     if (prefs.endpointRule1) initMsg.endpointRule1 = prefs.endpointRule1;
     if (prefs.endpointRule2) initMsg.endpointRule2 = prefs.endpointRule2;
     if (prefs.endpointRule3) initMsg.endpointRule3 = prefs.endpointRule3;
@@ -583,8 +654,7 @@ async function startRecognition(msg: any, respond: () => void) {
     initMsg.translationDirection = tdir === 'zh-en' || tdir === 'en-zh' ? tdir : 'auto';
     initMsg.translationTiming = prefs.translationTiming === 'final' ? 'final' : 'stream';
     // 热词随 INIT 下发：offscreen 建 recognizer 时一次性烘焙进配置
-    const hotwords = (await chrome.storage.local.get('tmspeech_hotwords'))['tmspeech_hotwords'];
-    if (Array.isArray(hotwords) && hotwords.length) initMsg.hotwords = hotwords;
+    if (sessionHotwords) initMsg.hotwords = sessionHotwords;
     if (offscreenPort) {
       offscreenPort.postMessage(initMsg);
     } else {

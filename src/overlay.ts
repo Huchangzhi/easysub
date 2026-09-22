@@ -109,7 +109,13 @@ export class Overlay {
   };
 
   create() {
-    if (this.overlay) return;
+    // 坑：存活判据必须是 isConnected，不能只判 this.overlay 非空。节点可能已经
+    // "被移出 DOM"（宿主页面 SPA 换页重建容器、全屏迁移时挂载点被替换、或更新的
+    // 副本在 create() 里摘除同 id 节点），而本实例的引用仍非空——只判非空会让
+    // create() 永久早退：既画不出字幕，又让后续 OVERLAY_TOGGLE 的"复活"全部失效，
+    // 表现为字幕突然消失且再也回不来（直到刷新）。此处改为发现节点已游离就重建。
+    if (this.overlay && this.overlay.isConnected) return;
+    if (this.overlay) { this.overlay.remove(); this.overlay = null; }
     const overlay = document.createElement('div');
     overlay.id = 'tmspeech-overlay';
     this.overlay = overlay;
@@ -184,7 +190,9 @@ export class Overlay {
       }
       if (this.textEl) {
         this.textEl.style.cssText = baseStyle;
-        this.textEl.textContent = tSync(this._lang, 'loadingModel');
+        // 坑：这里**不能**再写"正在加载模型"当占位文案。它是硬编码的、与真实阶段无关：
+        // 模型常驻复用后根本没有加载动作，用户却先看到"正在加载模型"、再被真实状态覆盖，
+        // 观感上就是提示错乱。状态一律由 offscreen 在真实转换点经 STATUS_TEXT 下发。
         // ponytail: _pendingText 处理 TEXT_CHANGED 先于 overlay 创建（重连时），create 后立即替换
         if (this._pendingText) { this.textEl.textContent = this._pendingText; this._pendingText = ''; }
       }
@@ -263,6 +271,12 @@ export class Overlay {
         break;
       case 'TEXT_CHANGED':
         this.setText(msg.text);
+        break;
+      case 'STATUS_TEXT':
+        // 状态文案（正在加载模型 / 正在等待音频 / 请选择共享屏幕）与字幕文本分流：
+        // 只写当前字幕行，会被随后的真实字幕自然覆盖；不进回看缓冲、不参与译文绑定。
+        // key 为空表示"清除状态"（例如音频已拿到、接下来就该出字了）。
+        this.setText(msg.key ? tSync(this._lang, msg.key) : '');
         break;
       case 'SENTENCE_DONE':
         // 坑：只收 SENTENCE_DONE 的终版文本入回看缓冲；流式 TEXT_CHANGED 是中间态，

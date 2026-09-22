@@ -1352,6 +1352,11 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'TEXT_CHANGED':
       textPreview.innerHTML = `<div class="current-text">${escapeHtml(msg.text) || '...'}</div>`;
       break;
+    case 'STATUS_TEXT':
+      // 状态文案（正在加载模型 / 正在等待音频 / 请选择共享屏幕）落到状态栏，
+      // 不再走 TEXT_CHANGED 混进"当前字幕"预览区——旧实现会把这类状态显示成一句字幕。
+      log(msg.key ? tSync(currentLang, msg.key) : '');
+      break;
     case 'SENTENCE_DONE': {
       const el = document.createElement('div');
       el.className = 'sentence';
