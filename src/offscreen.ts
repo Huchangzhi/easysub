@@ -894,6 +894,13 @@ function setupPort() {
       });
     }
 
+    if (msg.type === 'TRANSLATE_TEST_CANCEL') {
+      // 面板二次点击"取消"：终止测试 worker（若为测试临时创建的）并结束挂起的应答。
+      // 此前 bg 侧没有这条消息的分支、这里也没有处理——"取消"按钮是假的，
+      // 临时 worker 会继续把 216MB 翻译模型加载完（白烧数秒 CPU）才因结果返回而收尾。
+      cancelTranslateTest();
+    }
+
     if (msg.type === 'MIC_CHUNK') {
       // mic 模式音频入口：悬浮窗（可见扩展页）采集 PCM，经 bg 逐块转发至此。
       // 坑：Port 走 JSON 克隆，ArrayBuffer 到这里已变成普通数组（见 floating.ts 注释），

@@ -694,6 +694,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg.type === 'TRANSLATE_TEST_CANCEL') {
+    // 面板"测试翻译"的取消：转发给 offscreen 让它 terminate 临时 worker 并结束挂起应答。
+    // 坑：此前 bg 没有这个分支，消息被静默丢弃——"取消"按钮是假的，测试 worker 会把
+    // 216MB 翻译模型加载完才收尾。端口不活时无事可做（SW 重启后旧应答通道已失效）。
+    if (offscreenPort) {
+      try { offscreenPort.postMessage({ type: 'TRANSLATE_TEST_CANCEL' }); } catch {}
+    }
+  }
+
   if (msg.type === 'START_RECOGNITION') {
     // 启动体已抽成独立函数（startRecognition）：tab/system/mic 三态共用同一套
     // 竞态防护（代次核对、旧文档释放等待、pending 投递队列），此处只做通道收口。
