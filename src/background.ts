@@ -168,15 +168,37 @@ function appendTranscript(text: string, ts: number = Date.now()) {
   });
 }
 
+// 坑：hasDocument() 与 createDocument() 之间没有互斥（TOCTOU）。START 与"测试翻译"
+// 两条路径几乎同时冷启动时会双发 createDocument，第二个必抛
+// "Only a single offscreen document may be created"——START 路径直接变"启动失败"。
+// 用模块级 in-flight promise 串行化，catch 后复查文档确实在就视为成功（被对手创建）。
+let ensureOffscreenInFlight: Promise<void> | null = null;
 async function ensureOffscreen() {
   const exists = await chrome.offscreen.hasDocument();
   if (exists) return;
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html',
-    // DISPLAY_MEDIA：system 模式在文档内直接 getDisplayMedia（桌面采集+系统音频）
-    reasons: ['USER_MEDIA', 'DISPLAY_MEDIA'] as any,
-    justification: 'Speech recognition audio processing',
-  });
+  if (ensureOffscreenInFlight) {
+    await ensureOffscreenInFlight.catch(() => {});
+    if (!(await chrome.offscreen.hasDocument().catch(() => false))) {
+      throw new Error('offscreen 文档创建失败');
+    }
+    return;
+  }
+  ensureOffscreenInFlight = chrome.offscreen
+    .createDocument({
+      url: 'offscreen.html',
+      // DISPLAY_MEDIA：system 模式在文档内直接 getDisplayMedia（桌面采集+系统音频）
+      reasons: ['USER_MEDIA', 'DISPLAY_MEDIA'] as any,
+      justification: 'Speech recognition audio processing',
+    })
+    .then(
+      undefined,
+      async (e) => {
+        // 并发对手赢下了创建 → 文档在即可视为成功；文档真不在才把原始错误抛出
+        if (!(await chrome.offscreen.hasDocument().catch(() => false))) throw e;
+      },
+    )
+    .finally(() => { ensureOffscreenInFlight = null; });
+  await ensureOffscreenInFlight;
 }
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -519,17 +541,18 @@ const translateTestResolvers: Record<number, (r: any) => void> = {};
 // 识别会话启动体：popup 的 START_RECOGNITION 消息进入。respond 统一收口
 // sendResponse（异步完成时经闭包回调确认通道）。
 async function startRecognition(msg: any, respond: () => void) {
+  // 本次启动的会话代次：异步体在每个 await 恢复点核对，期间发生过任何清理
+  // （STOP/关标签页/错误清理）代次都会前进，此时必须立即中止后续步骤，
+  // 否则就是"用户已停止但采集继续"的幽灵会话。
+  // 提到 try 外：外层 catch 也要核对代次（见 catch 内注释）。
+  const myEpoch = ++sessionEpoch;
+  const stale = () => myEpoch !== sessionEpoch;
   try {
     // 坑：上一会话可能刚被"关标签页自动停止"清理，其 closeDocument 是异步生效的；
     // 旧文档还没销毁完就创建新文档、申请新 capture 流会撞上释放竞态，典型表现就是
     // offscreen 里 getUserMedia 报 "Error starting tab capture"。
     // 同时清掉可能遗留的重连超时定时器，防止它把刚启动的新会话误判成断连而清场。
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    // 本次启动的会话代次：异步体在每个 await 恢复点核对，期间发生过任何清理
-    // （STOP/关标签页/错误清理）代次都会前进，此时必须立即中止后续步骤，
-    // 否则就是"用户已停止但采集继续"的幽灵会话。
-    const myEpoch = ++sessionEpoch;
-    const stale = () => myEpoch !== sessionEpoch;
     // 坑：PENDING_KEY 要在这里就先清掉。下面复用残留文档时会有"等端口重连"的窗口，
     // 期间端口一连上就会触发 checkPendingInit，把上一轮遗留的过期 INIT 投递出去
     // （幽灵启动：参数是旧会话的，pipeline 却为新会话跑起来）。先清后等。
@@ -640,6 +663,17 @@ async function startRecognition(msg: any, respond: () => void) {
     // 就绪后发 REQUEST_STREAM，这里即时签发、立即消费。
     await ensureOffscreen();
     if (stale()) { respond(); return; }
+    // 坑：文档建了但自身脚本起不来（构建缺文件/初始化即崩）时端口永远连不上，INIT
+    // 躺在 PENDING_KEY 里无人投递——会话停在 Running、无字幕、无报错、只有计时在走，
+    // 用户完全无从排查。等端口有限时长，超时按启动失败收敛（ERROR + cleanupAll）。
+    if (!offscreenPort) {
+      const readyDeadline = Date.now() + 10000;
+      while (!offscreenPort && Date.now() < readyDeadline) {
+        await new Promise(r => setTimeout(r, 100));
+        if (stale()) { respond(); return; }
+      }
+      if (!offscreenPort) throw new Error('offscreen 文档未能就绪（10s 超时），请重载扩展后重试');
+    }
 
     // 配置在上面已读过（复用判定要用），这里只组装消息，不再重复读 storage
     const initMsg: any = { type: 'INIT_OFFSCREEN', tabId: msg.tabId, source, lang, usePunct };
@@ -668,6 +702,10 @@ async function startRecognition(msg: any, respond: () => void) {
 
     respond();
   } catch (e) {
+    // 坑：catch 必须先核对代次。异常若来自"已被清理/被新 START 作废"的旧启动体
+    // （epoch 已前进），这里的 cleanupAll() 会把**新会话**整个拆掉，再弹一条与用户
+    // 操作无关的"启动失败"——旧实现正是 P1-5 双创建异常的放大器。
+    if (stale()) { respond(); return; }
     sendToPopup({ type: 'ERROR', message: `启动失败: ${e}` });
     cleanupAll();
     respond();
