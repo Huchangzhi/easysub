@@ -49,6 +49,27 @@ export async function saveModelBlob(key: string, blob: Blob): Promise<void> {
   }
 }
 
+// 原子批量写：可选地先删匹配旧键、再写入整批新键，全部放进**同一个读写事务**。
+// IndexedDB 事务是原子的——中途失败/页面关闭整体回滚，不会出现"旧模型已删、
+// 新模型只写一半"的半套损坏状态（旧实现先删后逐文件写，写一半断掉即损坏）。
+// 注意：键清单先在只读事务里算好再开写事务，避免读写事务内跨 await（兼容性最稳）。
+export async function saveModelFilesAtomic(
+  entries: { key: string; data: ArrayBuffer | Blob }[],
+  deleteMatch?: (key: string) => boolean,
+): Promise<void> {
+  const doomed = deleteMatch ? (await listModelKeys()).filter(deleteMatch) : [];
+  const db = await openDb();
+  try {
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    for (const key of doomed) store.delete(key);
+    for (const { key, data } of entries) store.put(data, key);
+    await txDone(tx);
+  } finally {
+    db.close();
+  }
+}
+
 export async function getModelFile(key: string): Promise<Blob | null> {
   const db = await openDb();
   try {

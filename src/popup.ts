@@ -1,5 +1,5 @@
 import { getLang, setLang, tSync } from './i18n';
-import { listModelKeys, saveModelFile, saveModelBlob, getModelFile, deleteModelKeys } from './model-db';
+import { listModelKeys, saveModelFilesAtomic, saveModelBlob, getModelFile } from './model-db';
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -929,6 +929,15 @@ btnAsrModelDownload.onclick = async () => {
         asrProgressText.textContent = fmtMB(received);
       }
     }
+    // 坑：完整性校验必须在落库前做。旧实现只看 res.ok——截断的响应（中途断连）或
+    // 代理错误页会被存成几百 MB 垃圾条目，之后每次启动在 offscreen 撞 30s 超时，
+    // 且坏条目不会自愈（导入路径的 100MB 下限校验这里原本是缺的）。
+    if (total > 0 && received < total) {
+      throw new Error(`下载不完整 ${fmtMB(received)} / ${fmtMB(total)}`);
+    }
+    if (received < 100 * 1024 * 1024) {
+      throw new Error(`文件过小（${fmtMB(received)}），不是有效的模型文件`);
+    }
     asrModelStatus.textContent = tSync(currentLang, 'asrModelDownloadDone');
     // 直接存 Blob（IndexedDB 原生支持），避免再拷贝一份 412MB
     await saveModelBlob(ASR_DB_KEY, new Blob(chunks));
@@ -1327,9 +1336,10 @@ modelFolderPicker.onchange = async () => {
   const files = modelFolderPicker.files;
   if (!files || files.length === 0) return;
   try {
-    // 只清翻译模型键，保留 __asr_wasm_data：否则重传翻译模型会把 412MB 的 ASR 模型也清掉
-    await deleteModelKeys(k => k.includes('opus-mt'));
-    let n = 0;
+    // 先在内存里收齐全部文件再一次性原子落库（删旧 opus-mt 键 + 写新键同事务）。
+    // 坑：旧实现先删后逐文件写，中途失败（配额触顶/页面关闭）留下半套模型——
+    // worker 按"缺文件"报错，用户重传前翻译彻底不可用。
+    const entries: { key: string; data: ArrayBuffer }[] = [];
     for (const f of Array.from(files)) {
       // webkitRelativePath 形如 `<选中文件夹>/opus-mt-en-zh/config.json`，
       // 存库时去掉选中文件夹前缀、以模型目录（opus-mt-en-zh/opus-mt-zh-en）为根，
@@ -1337,10 +1347,10 @@ modelFolderPicker.onchange = async () => {
       const parts = f.webkitRelativePath.split('/');
       const modelIdx = parts.findIndex(p => p === 'opus-mt-en-zh' || p === 'opus-mt-zh-en');
       const key = (modelIdx >= 0 ? parts.slice(modelIdx) : parts.slice(1)).join('/');
-      await saveModelFile(key, await f.arrayBuffer());
-      n++;
+      entries.push({ key, data: await f.arrayBuffer() });
     }
-    translateStatus.textContent = tSync(currentLang, 'modelLoaded').replace('{n}', String(n));
+    await saveModelFilesAtomic(entries, k => k.includes('opus-mt'));
+    translateStatus.textContent = tSync(currentLang, 'modelLoaded').replace('{n}', String(entries.length));
   } catch (e: any) {
     log(tSync(currentLang, 'errorPrefix').replace('{m}', String(e?.message || e)));
   }
@@ -1351,6 +1361,11 @@ chrome.runtime.onMessage.addListener((msg) => {
   switch (msg.type) {
     case 'TEXT_CHANGED':
       textPreview.innerHTML = `<div class="current-text">${escapeHtml(msg.text) || '...'}</div>`;
+      break;
+    case 'STATUS_TEXT':
+      // 状态文案（正在加载模型 / 正在等待音频 / 请选择共享屏幕）落到状态栏，
+      // 不再走 TEXT_CHANGED 混进"当前字幕"预览区——旧实现会把这类状态显示成一句字幕。
+      log(msg.key ? tSync(currentLang, msg.key) : '');
       break;
     case 'SENTENCE_DONE': {
       const el = document.createElement('div');

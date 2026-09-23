@@ -77,6 +77,10 @@ export class Overlay {
   private dragState: {
     baseLeft: number; baseTop: number;
     startX: number; startY: number;
+    // 最近一次经边界 rubberband 钳制后的位移。pointerup 落盘必须用它，
+    // 而不是拿 e.clientX 重算——setPointerCapture 下指针可在窗口外释放，
+    // 原始坐标不带钳制，松手瞬间叠层会"飞"出屏幕并被持久化（字幕从此找不到）。
+    lastDx: number; lastDy: number;
   } | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -109,7 +113,13 @@ export class Overlay {
   };
 
   create() {
-    if (this.overlay) return;
+    // 坑：存活判据必须是 isConnected，不能只判 this.overlay 非空。节点可能已经
+    // "被移出 DOM"（宿主页面 SPA 换页重建容器、全屏迁移时挂载点被替换、或更新的
+    // 副本在 create() 里摘除同 id 节点），而本实例的引用仍非空——只判非空会让
+    // create() 永久早退：既画不出字幕，又让后续 OVERLAY_TOGGLE 的"复活"全部失效，
+    // 表现为字幕突然消失且再也回不来（直到刷新）。此处改为发现节点已游离就重建。
+    if (this.overlay && this.overlay.isConnected) return;
+    if (this.overlay) { this.overlay.remove(); this.overlay = null; }
     const overlay = document.createElement('div');
     overlay.id = 'tmspeech-overlay';
     this.overlay = overlay;
@@ -184,7 +194,9 @@ export class Overlay {
       }
       if (this.textEl) {
         this.textEl.style.cssText = baseStyle;
-        this.textEl.textContent = tSync(this._lang, 'loadingModel');
+        // 坑：这里**不能**再写"正在加载模型"当占位文案。它是硬编码的、与真实阶段无关：
+        // 模型常驻复用后根本没有加载动作，用户却先看到"正在加载模型"、再被真实状态覆盖，
+        // 观感上就是提示错乱。状态一律由 offscreen 在真实转换点经 STATUS_TEXT 下发。
         // ponytail: _pendingText 处理 TEXT_CHANGED 先于 overlay 创建（重连时），create 后立即替换
         if (this._pendingText) { this.textEl.textContent = this._pendingText; this._pendingText = ''; }
       }
@@ -224,17 +236,28 @@ export class Overlay {
     this.mountOverlay();
     // 位置/尺寸持久化只属于页内卡片模式；填充模式尺寸恒等于窗口尺寸，无需恢复与监听
     if (!this.fill) {
+      // 坑：默认位置用 left:50% + translate(-50%,-50%) 居中，这是"依赖 transform 补偿"
+      // 的中间态——若被 ResizeObserver 的**首帧回调**原样落盘，下次加载读回 left:'50%'
+      // 后按恢复逻辑置 transform:'none'，叠层左上角就钉死在屏幕中心，永久偏移半宽/半高
+      // （用户零操作就会被写坏）。挂载后立即把视觉位置换算成绝对像素并清除 transform，
+      // 让落盘值从第一代起就是 px 坐标。
+      const r = overlay.getBoundingClientRect();
+      s.left = r.left + 'px';
+      s.top = r.top + 'px';
+      s.transform = 'none';
       const key = this.storageKey;
       chrome.storage.local.get(key).then(stored => {
         if (!this.overlay) return;
         const d = (stored[key] as any) || {};
-        if (d.left) this.overlay.style.left = d.left;
-        if (d.top) this.overlay.style.top = d.top;
-        if (d.width) this.overlay.style.width = d.width;
-        if (d.height) this.overlay.style.height = d.height;
-        if (d.left || d.top) {
-          this.overlay.style.transform = 'none';
+        // 坑：只接受 px 值。历史版本可能落盘过 left:'50%' 这类百分比中间态，
+        // 恢复它们 + transform:'none' 正是"字幕钉在屏幕中心"的成因，直接弃用走默认位。
+        const px = (v: any) => typeof v === 'string' && /^-?\d+(\.\d+)?px$/.test(v.trim());
+        if (px(d.left) && px(d.top)) {
+          this.overlay.style.left = d.left;
+          this.overlay.style.top = d.top;
         }
+        if (px(d.width)) this.overlay.style.width = d.width;
+        if (px(d.height)) this.overlay.style.height = d.height;
       });
 
       new ResizeObserver(() => this.scheduleSave()).observe(overlay);
@@ -263,6 +286,12 @@ export class Overlay {
         break;
       case 'TEXT_CHANGED':
         this.setText(msg.text);
+        break;
+      case 'STATUS_TEXT':
+        // 状态文案（正在加载模型 / 正在等待音频 / 请选择共享屏幕）与字幕文本分流：
+        // 只写当前字幕行，会被随后的真实字幕自然覆盖；不进回看缓冲、不参与译文绑定。
+        // key 为空表示"清除状态"（例如音频已拿到、接下来就该出字了）。
+        this.setText(msg.key ? tSync(this._lang, msg.key) : '');
         break;
       case 'SENTENCE_DONE':
         // 坑：只收 SENTENCE_DONE 的终版文本入回看缓冲；流式 TEXT_CHANGED 是中间态，
@@ -360,12 +389,20 @@ export class Overlay {
         if (this.fill) break; // 填充模式无独立位置，重置无意义
         chrome.storage.local.remove(this.storageKey);
         if (this.overlay) {
+          // 重置为屏幕中心。与 create() 同理：先按 50%+translate 定位，再立即换算成
+          // 绝对像素并清 transform——不留"left:50% + translate(-50%)"中间态，
+          // 否则会被 ResizeObserver 原样落盘，下次加载就是"字幕钉在屏幕中心"。
           this.overlay.style.left = '50%';
           this.overlay.style.top = '50%';
           this.overlay.style.transform = 'translate(-50%, -50%)';
           this.overlay.style.width = '';
           this.overlay.style.height = '';
+          const r = this.overlay.getBoundingClientRect();
+          this.overlay.style.left = r.left + 'px';
+          this.overlay.style.top = r.top + 'px';
+          this.overlay.style.transform = 'none';
         }
+        this.scheduleSave();
         break;
     }
   }
@@ -676,6 +713,8 @@ export class Overlay {
         baseTop: rect.top,
         startX: e.clientX,
         startY: e.clientY,
+        lastDx: 0,
+        lastDy: 0,
       };
       this.overlay!.setPointerCapture(e.pointerId);
       if (this.lockBtn) this.lockBtn.style.opacity = '1';
@@ -695,17 +734,20 @@ export class Overlay {
       if (newTop < 0) dy = -rubberband(-newTop, vh);
       if (newLeft + ow > vw) dx = (vw - ow - this.dragState.baseLeft) + rubberband(newLeft + ow - vw, vw);
       if (newTop + oh > vh) dy = (vh - oh - this.dragState.baseTop) + rubberband(newTop + oh - vh, vh);
+      this.dragState.lastDx = dx;
+      this.dragState.lastDy = dy;
       this.overlay!.style.transform = `translate(${dx}px, ${dy}px)`;
     };
 
-    this.overlay.onpointerup = (e) => {
+    this.overlay.onpointerup = () => {
       if (!this.dragState) return;
-      const dx = e.clientX - this.dragState.startX;
-      const dy = e.clientY - this.dragState.startY;
-      const targetLeft = this.dragState.baseLeft + dx;
-      const targetTop = this.dragState.baseTop + dy;
-      this.overlay!.style.left = targetLeft + 'px';
-      this.overlay!.style.top = targetTop + 'px';
+      // 坑：位移必须取 move 阶段钳制后的 lastDx/lastDy，不能用 e.clientX 重算——
+      // 指针在窗口外松手时原始坐标超界，落盘后字幕就停在屏幕外了。
+      // transform 恒为 'none'（create 时已把位置换算成 px），这里无需再换算。
+      const dx = this.dragState.lastDx;
+      const dy = this.dragState.lastDy;
+      this.overlay!.style.left = (this.dragState.baseLeft + dx) + 'px';
+      this.overlay!.style.top = (this.dragState.baseTop + dy) + 'px';
       this.overlay!.style.transform = 'none';
       this.scheduleSave();
       this.dragState = null;

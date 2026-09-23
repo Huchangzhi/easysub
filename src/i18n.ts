@@ -180,6 +180,8 @@ const strings: Record<string, Record<string, string>> = {
     unsupSwitchMic: '改用麦克风',
     unsupGotIt: '我知道了',
     pickerCancelled: '已取消屏幕选择，识别未开始',
+    pickingScreen: '请在弹出的窗口中选择要共享的屏幕',
+    sourceEnded: '音频来源已结束（停止共享 / 标签页被关闭），识别已停止',
     sourceOutsideTip: '想在浏览器之外的软件上用字幕？试试改一下音频来源',
     // —— 麦克风音源（采集在悬浮字幕窗内，PCM 经 bg 转发给 offscreen）——
     // 无「麦克风设备」选择项：设备由 Chrome 授权弹窗选择并记住，扩展内不重复该 UI
@@ -354,6 +356,8 @@ const strings: Record<string, Record<string, string>> = {
     unsupSwitchMic: 'Use microphone',
     unsupGotIt: 'Got it',
     pickerCancelled: 'Screen picking cancelled — recognition not started',
+    pickingScreen: 'Pick the screen to share in the popup',
+    sourceEnded: 'Audio source ended (sharing stopped / tab closed) — recognition stopped',
     sourceOutsideTip: 'Want subtitles in apps outside the browser? Try switching the audio source.',
     // —— Microphone source (captured in the floating window, PCM relayed via bg to offscreen) ——
     // No "microphone device" picker: Chrome's permission prompt lets the user choose the
