@@ -86,7 +86,9 @@ let hasStarted = false; // 是否启动过识别：区分 Hero 卡「待命」�
 let currentLang = 'zh_CN';
 // 坑：t19 起存储契约升级为 {text, ts}（ts=Date.now()，0=legacy 无时标哨兵）——
 // 读取必须做 string→{text,ts:0} 懒归一化（bg 同款逻辑），否则 .text/.ts 是 undefined 直接炸 UI
-interface TranscriptEntry { text: string; ts: number; tr?: string }
+// seq：本会话内句序号（1 起）。仅用于实时消息流中 SENTENCE_DONE ↔ TRANSLATION_FINAL 的
+// 精确配对；不持久化（storage 侧历史由 bg 按"尾部偏移"归位，见 background.ts 注释）
+interface TranscriptEntry { text: string; ts: number; tr?: string; seq?: number }
 let transcriptEntries: TranscriptEntry[] = [];
 const PREFS_KEY = 'tmspeech_prefs';
 const TRANSCRIPT_KEY = 'tmspeech_transcript';
@@ -1375,18 +1377,28 @@ chrome.runtime.onMessage.addListener((msg) => {
       if (textPreview.children.length > 10) textPreview.lastElementChild?.remove();
       // 坑：bg 转发的 SENTENCE_DONE 可能不带 ts（旧版本/异常路径），归零走 legacy
       // 渲染（无时标）；storage 里的权威条目由 bg appendTranscript 统一写 ts
-      transcriptEntries.push({ text: String(msg.text ?? ''), ts: Number(msg.ts) || 0 });
+      // seq：句序号（offscreen 原样送达），TRANSLATION_FINAL 据此精确配对译文；
+      // 旧消息无 seq 时为 0，配对退回"末条"旧语义
+      transcriptEntries.push({ text: String(msg.text ?? ''), ts: Number(msg.ts) || 0, seq: Number(msg.seq) || 0 });
       renderTranscript();
       break;
     }
     case 'TRANSLATION_FINAL':
-      // 定稿译文：bg 在持久化历史的同时转发一份，挂在刚入列的末条原句上即时渲染
-      // （正常时序下该句是当前会话最后一条，但历史里可能已有本会话前的条目，
-      // 因此严格取"列表末尾"而非 transcriptEntries[transcriptEntries.length-1]）
+      // 定稿译文：按 seq 精确挂到对应原句（慢速下译文迟到时句子可能已不是末条——
+      // 旧实现挂"末条"导致译文错位/丢失）；无 seq 的旧消息退回"末条无译文"旧语义
       if (msg.text) {
-        const last = transcriptEntries[transcriptEntries.length - 1];
-        if (last && !last.tr) last.tr = String(msg.text);
-        renderTranscript();
+        const seq = Number(msg.seq) || 0;
+        let target = seq > 0
+          ? [...transcriptEntries].reverse().find(e => e.seq === seq && !e.tr)
+          : undefined;
+        if (!target) {
+          const last = transcriptEntries[transcriptEntries.length - 1];
+          if (last && !last.tr) target = last;
+        }
+        if (target) {
+          target.tr = String(msg.text);
+          renderTranscript();
+        }
       }
       break;
     case 'LEVEL': {

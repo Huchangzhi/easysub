@@ -132,16 +132,29 @@ function normalizeTranscriptEntry(entry: unknown): TranscriptEntry {
   };
 }
 
-// 换句后的定稿译文挂到历史末条原句上（正常时序下该句刚被 SENTENCE_DONE 追加）。
+// 换句后的定稿译文挂到历史原句上。旧实现无条件挂"末条"：一旦 offscreen 积压
+// （慢速机器/长句推理），TRANSLATION_FINAL 迟到时 popup 里可能已插入了更新的句子，
+// 译文就会被挂错句——这正是"记录里部分句子翻译丢失/错位"的成因。
+// 现在条目带 seq（offscreen 随 SENTENCE_DONE 原样送达），译文按 seq 精确配对；
+// seq 缺失（旧消息/异常路径）才退回"末条无译文"的旧语义。
 // 走同一串行队列，避免与 appendTranscript 的读改写并发互相覆盖丢数据。
-function attachTranscriptTranslation(text: string) {
+function attachTranscriptTranslation(text: string, seq?: number) {
   if (!text) return;
   transcriptQueue = transcriptQueue.then(async () => {
     try {
       const r = await chrome.storage.local.get(TRANSCRIPT_KEY);
       const arr = ((r[TRANSCRIPT_KEY] as unknown[]) || []).map(normalizeTranscriptEntry);
-      const last = arr[arr.length - 1];
-      if (last && !last.tr) last.tr = String(text);
+      let target: TranscriptEntry | undefined;
+      if (typeof seq === 'number' && seq > 0) {
+        // seq 从 1 起、条目按句追加：同会话内第 seq 条即目标。历史遗留条目（旧会话/无 seq）
+        // 会让下标错位，这里以"从尾部数第 N 条"归位（N = 总条数 - seq），对不齐就退回末条。
+        const backIdx = arr.length - seq;
+        if (backIdx >= 0 && backIdx < arr.length) target = arr[backIdx];
+        if (!target || target.tr) target = arr[arr.length - 1];
+      } else {
+        target = arr[arr.length - 1];
+      }
+      if (target && !target.tr) target.tr = String(text);
       await chrome.storage.local.set({ [TRANSCRIPT_KEY]: arr });
     } catch (e) {
       console.log('[TM BG] 转写译文持久化失败:', e);
@@ -278,9 +291,10 @@ chrome.runtime.onConnect.addListener((port) => {
     }
     if (msg.type === 'FW_POP') {
       const p = msg.payload || {};
-      // 定稿译文：offscreen 每句完成时经 FW_POP 送来，挂到历史末条原句；同时照常转发 popup
+      // 定稿译文：offscreen 每句完成时经 FW_POP 送来，按 seq 挂到对应历史原句
+      // （seq 缺失时退回"末条"旧语义）；同时照常转发 popup
       if (p.type === 'TRANSLATION_FINAL') {
-        attachTranscriptTranslation(p.text);
+        attachTranscriptTranslation(p.text, p.seq);
       }
       // 电平快照：popup 关闭时 LEVEL 消息无人消费，这里留着，重开面板时还原最近波形，
       // 避免"每次打开都从空基线重新填充"。钳值防脏；只保留最近 ~7s（60 条 × 120ms）。
@@ -310,6 +324,7 @@ chrome.runtime.onConnect.addListener((port) => {
         // 坑：offscreen 发的 SENTENCE_DONE 只带 text 不带 ts——原样转发会让 popup
         // 推 {text, ts:0}，新句在面板里永远不显示时间戳（storage 入库反而是对的）。
         // 这里统一盖一次戳：转发与入库共用同一时刻，屏上偏移与存储条目严格一致。
+        // seq 原样透传：popup 的 TRANSLATION_FINAL 也按它精确挂译文，两侧索引一致。
         const ts = Date.now();
         sendToPopup({ ...p, ts });
         appendTranscript(p.text, ts);
