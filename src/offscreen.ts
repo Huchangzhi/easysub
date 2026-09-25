@@ -342,8 +342,8 @@ function translateStream(text: string) {
   if (inFlight?.kind === 'stream' && inFlight.seq === sentenceSeq && inFlight.text === text) return;
   if (streamSlot && streamSlot.seq === sentenceSeq && streamSlot.text === text) return;
   // 只更新槽：槽永远持有最新中间态，旧版本被覆盖即"过时跳过"（用户指定的 A/AB 语义）。
-  // 流式冷却在泵的槽转换处统一检查——这里不查，否则回包驱动的泵路径会绕过冷却，
-  // 实测短文本回包快于 500ms 时节奏退化成"每条回包都翻"，字幕延迟回升到 3s。
+  // 是否立刻提交由泵决定：在途/排队中已有当前句翻译就不重复排队，worker 空闲则立即出发，
+  // 没有任何人为延迟（定时冷却已按用户方案移除，节奏完全由推理速度决定）。
   streamSlot = { text, seq: sentenceSeq };
   pumpTranslate();
 }
