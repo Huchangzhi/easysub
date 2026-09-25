@@ -105,14 +105,11 @@ const bestBySeq = new Map<number, string>();
 // backlog 上限：极端慢速下最多积压这些句的补译，防内存无界增长。
 // 超限时丢最老的——彼时它们已超出"上一句"窗口很远，用户早已滚动过去。
 const BACKLOG_MAX = 8;
-// 流式冷却：距上次流式提交不足该间隔就不提交新的中间态（定稿/补译不受限）。
-// 坑：翻译 worker 满负荷跑长句推理时会和主线程（音频泵/标点推理）争 CPU，
-// 无冷却的"每次文本变化都翻"实测把字幕处理链路延迟推到 3s。500ms 是业界
-// re-translation 节拍（Google/文献口径）；冷却期内新文本只更新流式槽（合并），
-// 到期后翻最新一版——过时的中间态天然被跳过（用户明确要求的语义）。
-const STREAM_COOLDOWN_MS = 500;
-let transLastStreamAt = 0;
-let transCooldownTimer: any = null;
+// 流式提交策略（用户指定，取代旧的 500ms 定时冷却）：
+// 同一时刻至多一条当前句中间态翻译在途；文本更新只刷新流式槽（最新版覆盖旧版，
+// 被覆盖的旧版本就是被跳过的过时翻译，A/AB 语义），在途或排队中已有当前句翻译
+// 就绝不重复排队；worker 一空出来且槽里有待翻文本就立刻提交——没有任何人为延迟，
+// 节奏完全由推理速度决定。定稿/补译依旧最优先，绝不因流式跟句而延迟。
 // 会话代次：随请求下发给 worker 并原样回传，对账时校验。每次翻译状态整体复位
 // （INIT/STOP/测试取消）都递增——INIT 可能复用 offscreen 文档（worker 不重建），
 // 上一场在途请求的回包会迟到，其 seq 与新会话的小序号撞号时全靠 gen 区分。
@@ -187,7 +184,7 @@ function onTranslationResult(job: { kind: 'final' | 'stream'; seq: number; text:
 }
 
 // —— 队列泵：worker 空闲时按优先级取下一个任务 ——
-// 选取顺序：final（1）> stream（2，受冷却限流）> backlog（3）。
+// 选取顺序：final（1）> stream（2，无人工延迟）> backlog（3）。
 // 坑：必须在"置 inFlight 之后"才 postMessage，且泵函数自身幂等（inFlight 非空即退），
 // 防止 onmessage 与 enqueue 并发重入造成双发。
 function pumpTranslate() {
@@ -195,25 +192,18 @@ function pumpTranslate() {
   let job: TransJob | null = null;
   let idx = -1;
   let fromSlot = false;
-  // 优先级 1：定稿（上一句）——最高优先，绝不被冷却或积压拖延
+  // 优先级 1：定稿（上一句）——最高优先，绝不被流式跟句或积压拖延
   for (let i = 0; i < transQueue.length; i++) {
     if (transQueue[i].kind === 'final') { job = transQueue[i]; idx = i; break; }
   }
-  // 优先级 2：实时流式。冷却在这里统一检查（translateStream 只更新槽）：
-  // 回包驱动的重泵也走这里，短文本回包快于冷却间隔时不会退化成"每包必翻"。
-  // 槽永远只装最新中间态，被覆盖的旧版本就是被跳过的过时翻译（A/AB 语义）。
+  // 优先级 2：实时流式——无人工延迟：worker 空闲且槽里有最新中间态就立即提交。
+  // 槽永远只装最新一版，被覆盖的旧版本即被跳过的过时翻译（A/AB 语义）；
+  // 在途未完成时的文本更新只改槽，绝不重复排队（同句至多一条在途 + 一条待翻）。
   if (!job && streamSlot && translationTiming === 'stream') {
-    const wait = STREAM_COOLDOWN_MS - (Date.now() - transLastStreamAt);
-    if (wait > 0) {
-      if (!transCooldownTimer) {
-        transCooldownTimer = setTimeout(() => { transCooldownTimer = null; pumpTranslate(); }, wait);
-      }
-    } else {
-      job = { kind: 'stream', seq: streamSlot.seq, text: streamSlot.text, at: Date.now() };
-      fromSlot = true;
-    }
+    job = { kind: 'stream', seq: streamSlot.seq, text: streamSlot.text, at: Date.now() };
+    fromSlot = true;
   }
-  // 优先级 3：以往积压补译（流式冷却的空档里跑，worker 不空转）。
+  // 优先级 3：以往积压补译（当前句无待翻文本时的空档里跑，worker 不空转）。
   // 坑：同句的 final 可能已交付（bestBySeq 有记录）而 backlog 还排在队列里
   // （入队时它尚无结果）——不在这里拦截就会二次下发同一句定稿，popup 的
   // "末条无译文"兜底会把它挂到更新的句子上（审查发现的实际错挂路径）。
@@ -226,7 +216,7 @@ function pumpTranslate() {
     }
   }
   if (!job) return;
-  if (fromSlot) { streamSlot = null; transLastStreamAt = Date.now(); }
+  if (fromSlot) streamSlot = null;
   else if (idx >= 0) transQueue.splice(idx, 1);
   inFlight = { kind: job.kind === 'backlog' ? 'final' : job.kind, seq: job.seq, text: job.text };
   log(`[译] 提交 seq=${job.seq}/${job.kind} "${job.text.slice(0, 24)}" 队列余=${transQueue.length}${streamSlot ? ' 槽有货' : ''}`);
@@ -302,8 +292,6 @@ function resetTranslationState() {
   streamSlot = null;
   bestBySeq.clear();
   lastFinalTexts.clear();
-  if (transCooldownTimer) { clearTimeout(transCooldownTimer); transCooldownTimer = null; }
-  transLastStreamAt = 0;
   sentenceSeq = 1;
   transGen++; // 作废所有在途回包（见 transGen 声明处注释）
 }
