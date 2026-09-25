@@ -832,6 +832,12 @@ function setupPort() {
                 sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: lastPunctText })
                 sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: lastPunctText })
                 sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: lastPunctText })
+                // 坑（实测"实时译文反复横跳"根因）：流式翻译必须喂带标点的文本。
+                // opus-mt 对无标点的长串中文输出极不稳定——同一句每次前缀增长后重翻，
+                // 时而只翻第一分句、时而多翻、措辞漂移，屏幕上来回跳；带标点输入
+                // 结构清晰、输出稳定得多（定稿路径一直用带标点文本，效果对比明显）。
+                // 标点回调在本文本变化后数十毫秒内产出，无新增延迟。
+                translateStream(lastPunctText);
               }, 0);
             }
           } else {
@@ -839,8 +845,8 @@ function setupPort() {
             sendSafe('FW_CT', { type: 'OVERLAY_TEXT', prev: prevSentence, current: display })
             sendSafe('FW_CT', { type: 'TEXT_CHANGED', text: display })
             sendSafe('FW_POP', { type: 'TEXT_CHANGED', text: display })
+            translateStream(text);
           }
-          translateStream(text);
         },
         onSentenceDone: (text) => {
           // ponytail: addPunctuation 同步调 CT-Transformer 模型推理，会阻塞主线程
