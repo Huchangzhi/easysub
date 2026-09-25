@@ -105,6 +105,14 @@ const bestBySeq = new Map<number, string>();
 // backlog 上限：极端慢速下最多积压这些句的补译，防内存无界增长。
 // 超限时丢最老的——彼时它们已超出"上一句"窗口很远，用户早已滚动过去。
 const BACKLOG_MAX = 8;
+// 流式冷却：距上次流式提交不足该间隔就不提交新的中间态（定稿/补译不受限）。
+// 坑：翻译 worker 满负荷跑长句推理时会和主线程（音频泵/标点推理）争 CPU，
+// 无冷却的"每次文本变化都翻"实测把字幕处理链路延迟推到 3s。500ms 是业界
+// re-translation 节拍（Google/文献口径）；冷却期内新文本只更新流式槽（合并），
+// 到期后翻最新一版——过时的中间态天然被跳过（用户明确要求的语义）。
+const STREAM_COOLDOWN_MS = 500;
+let transLastStreamAt = 0;
+let transCooldownTimer: any = null;
 
 function dropStaleBest() {
   // 只保留活跃窗口内的 seq（当前句 + 上一句 + backlog 窗口），防 Map 无界增长
@@ -124,13 +132,22 @@ function createTranslateWorker() {
       finishTranslateTest({ ok: !!m.ok && !!m.text, text: m.text || '', error: m.reason === 'no-model' ? 'no-model' : (m.error || ''), debug: m.debug });
       return;
     }
-    // 坑：回包必须与请求对账（worker 串行返回，正常时序下头部即 inFlight；但"取消测试/
-    // 重建 worker"等路径会 terminate 后重建，旧请求的回包可能落在新生命周期里），
-    // 严格校验 kind/seq/text 三元组，对不上的回包直接丢弃不泵队列，防状态错乱。
-    if (inFlight && m.kind === inFlight.kind && m.seq === inFlight.seq && m.text === inFlight.text) {
+    // 坑：回包必须与请求对账，防 terminate/重建后旧回包冲状态。但只按 seq 对账——
+    // 实测发现 opus-mt 的 tokenizer/生成会对文本做规范化改写（大小写/标点/空格），
+    // 按 text 全等比对会让几乎所有回包对不上号而被整体丢弃（表现为一条译文都出不来）。
+    // seq 在 worker 是原样回传的，作为对账键足够：串行 worker 下同一 seq 的乱序回包
+    // 只可能是同一请求；kind 差异（final↔stream）由 onTranslationResult 按 seq 归位处理。
+    if (inFlight && m.seq === inFlight.seq) {
       const done = inFlight;
       inFlight = null;
-      onTranslationResult(done, m);
+      if (done.kind === 'stream' && m.kind !== 'stream') {
+        // 请求 stream 却回了 final 等异常形态：保守按 stream 语义交付，防覆盖定稿
+        onTranslationResult({ kind: 'stream', seq: done.seq, text: done.text }, m);
+      } else {
+        onTranslationResult(done, m);
+      }
+    } else if (inFlight) {
+      log(`翻译回包对不上号：在途 seq=${inFlight.seq}/${inFlight.kind}，回包 seq=${m.seq}/${m.kind}，丢弃`);
     }
     pumpTranslate();
   };
@@ -159,6 +176,7 @@ function onTranslationResult(job: { kind: 'final' | 'stream'; seq: number; text:
       sendSafe('FW_CT', { type: 'TRANSLATION_FINAL', text, seq: job.seq });
       sendSafe('FW_POP', { type: 'TRANSLATION_FINAL', text, seq: job.seq });
     }
+    log(`[译] 交付 seq=${job.seq}/${job.kind} → "${String(text).slice(0, 30)}"`);
   } else if (m.reason === 'no-model' && !translateWarned) {
     translateWarned = true;
     log('翻译不可用：未检测到翻译模型。请在扩展面板"实时翻译"中点击"选择模型"安装官方模型包（github.com/huchangzhi/easysub/releases）');
@@ -201,7 +219,9 @@ function pumpTranslate() {
     streamSlot = null;
   }
   if (idx >= 0) transQueue.splice(idx, 1);
+  if (job.kind === 'stream') transLastStreamAt = Date.now(); // 流式冷却计时起点
   inFlight = { kind: job.kind === 'backlog' ? 'final' : job.kind, seq: job.seq, text: job.text };
+  log(`[译] 提交 seq=${job.seq}/${job.kind} "${job.text.slice(0, 24)}" 队列余=${transQueue.length}${streamSlot ? ' 槽有货' : ''}`);
   translateWorker.postMessage({
     type: 'TRANSLATE',
     text: job.text,
@@ -271,6 +291,8 @@ function resetTranslationState() {
   streamSlot = null;
   bestBySeq.clear();
   lastFinalTexts.clear();
+  if (transCooldownTimer) { clearTimeout(transCooldownTimer); transCooldownTimer = null; }
+  transLastStreamAt = 0;
   sentenceSeq = 1;
 }
 
@@ -319,7 +341,20 @@ function translateStream(text: string) {
   // 与在途/已入队的最新中间态相同则跳过（去重，不丢新内容）
   if (inFlight?.kind === 'stream' && inFlight.seq === sentenceSeq && inFlight.text === text) return;
   if (streamSlot && streamSlot.seq === sentenceSeq && streamSlot.text === text) return;
+  // 流式冷却：间隔不足时只刷新槽（新文本自然覆盖旧文本=过时版本被跳过），
+  // 由到期定时器重入泵。注意冷却只挡 stream——final/backlog 不受限，
+  // 句子定稿的译文绝不因冷却而延迟。
+  const wait = STREAM_COOLDOWN_MS - (Date.now() - transLastStreamAt);
   streamSlot = { text, seq: sentenceSeq };
+  if (wait > 0) {
+    if (!transCooldownTimer) {
+      transCooldownTimer = setTimeout(() => {
+        transCooldownTimer = null;
+        pumpTranslate();
+      }, wait);
+    }
+    return;
+  }
   pumpTranslate();
 }
 
@@ -338,9 +373,16 @@ function translateFinal(text: string) {
     if (transQueue[i].kind === 'stream' && transQueue[i].seq === seq) transQueue.splice(i, 1);
   }
   if (streamSlot && streamSlot.seq === seq) streamSlot = null;
+  // 该句的在途流式请求已经没有意义（马上会被同一 seq 的定稿覆盖），作废对账：
+  // 回包到达时 seq 相同但请求已按 final 记账——这里直接清掉，让定稿任务顶上。
+  if (inFlight && inFlight.kind === 'stream' && inFlight.seq === seq) {
+    inFlight = null;
+    // 作废在途后立即补翻该句定稿：绝不等"回包空转一圈"
+  }
   const finalText = normalizeForTranslate(text);
   transQueue.push({ kind: 'final', seq, text: finalText, at: Date.now() });
   pumpTranslate();
+  log(`[译] final 入队 seq=${seq} 队列=${transQueue.length} 在途=${inFlight ? inFlight.kind + '#' + inFlight.seq : '无'}`);
 }
 
 // 以往句补译：上一句定稿尚未交付（worker 被"上一句"之外的占用拖住）时，

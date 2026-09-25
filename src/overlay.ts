@@ -359,10 +359,15 @@ export class Overlay {
             if (this.transEl) { this.transEl.textContent = ''; this.transEl.style.display = 'none'; }
           }
           if (this._lookbackEnabled) {
-            // 回看缓冲按 seq 精确配对；seq 对不上（缓冲被截断/旧消息）才退回
-            // "最早一条无译文句"的旧语义（FIFO，最老的缺口最可能是它）
-            const bySeq = s > 0 ? this.recentSentences.find(x => x.seq === s && !x.tr) : undefined;
-            const target = bySeq || this.recentSentences.find(x => !x.tr);
+            // 回看缓冲按 seq 精确配对。坑：FW_CT 消息经 bg 扇出到 tab 与悬浮窗两个端，
+            // 端到端到达顺序不保证（实测悬浮窗上 TRANSLATION_FINAL 可能先于
+            // SENTENCE_DONE 抵达）——此时该句还没入缓冲，bySeq 必然落空。
+            // 用最近完成句的 seq 邻域兜底：s 落在 [lastDoneSeq-8, lastDoneSeq+1] 内
+            // 就挂"最早一条无译文句"（FIFO，最老的缺口最可能就是它）；
+            // 超出邻域的补译才严格按 seq 配对，对不上挂最早缺口。
+            let target: { text: string; tr?: string; seq?: number } | undefined;
+            if (s > 0) target = this.recentSentences.find(x => x.seq === s && !x.tr);
+            if (!target) target = this.recentSentences.find(x => !x.tr);
             if (target) target.tr = String(msg.text);
           }
         }
