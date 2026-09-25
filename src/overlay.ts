@@ -60,8 +60,6 @@ export class Overlay {
   // 最近一次 SENTENCE_DONE 的句序号（offscreen 下发；0=尚未见到完成句）。
   // 当前句序号 = lastDoneSeq + 1，译文消息按序号路由到当前句行或上一句行。
   private lastDoneSeq = 0;
-  // 最近一次 SENTENCE_DONE 的完整原文（回看缓冲/补译配对用）
-  private lastDoneText = '';
   private recentSentences: { text: string; tr?: string; seq?: number }[] = []; // 新句在前，环形截断 RECENT_MAX
   private reviewBtn: HTMLButtonElement | null = null;
   private reviewPanel: HTMLDivElement | null = null;
@@ -306,7 +304,6 @@ export class Overlay {
         {
           const seq = Number(msg.seq) || 0;
           this.lastDoneSeq = seq > 0 ? seq : this.lastDoneSeq + 1;
-          this.lastDoneText = String(msg.text || '');
         }
         // 换句：手头的当前句译文立即移交"上一句"槽，当前行清空。
         // 坑：移交的前提是"当前句已有译文"。若该句的定稿翻译还没轮到（worker 慢），
@@ -339,32 +336,26 @@ export class Overlay {
         break;
       case 'TRANSLATION_FINAL':
         // 定稿译文按句序号归位：
-        //   seq === lastDoneSeq   → 属于上一句（正常时序：句完→定稿），
-        //   seq <  lastDoneSeq    → 更早句的 backlog 补译（慢速场景），挂回看缓冲；
-        //   seq === lastDoneSeq+1 → 该句已被判"完成"但本端还没收到 SENTENCE_DONE
-        //                          （消息跨端乱序兜底）：先补记序号再归位。
+        //   seq === lastDoneSeq → 属于上一句（正常时序：句完→定稿），写上一句译文行；
+        //   seq <  lastDoneSeq  → 更早句的 backlog 补译（慢速场景），只进回看缓冲，
+        //                         不碰当前显示（上一句行已属于更新的句子）。
         // 无 seq（旧消息）退回"属于上一句"的旧语义。
+        // 注：不存在 seq > lastDoneSeq 的定稿——offscreen 恒先发 SENTENCE_DONE 再发
+        // final（同线程同端口保序），无需防御性推进序号（审查时确认后移除）。
         if (msg.text) {
           const s = Number(msg.seq) || this.lastDoneSeq;
-          if (s === this.lastDoneSeq + 1) {
-            // 乱序兜底：先当"刚完成句"处理（不入缓冲——SENTENCE_DONE 随后就到，会带文本）
-            this.lastDoneSeq = s;
-          }
-          if (s === this.lastDoneSeq) {
-            if (this.prevTransEl) {
-              this.prevTransEl.textContent = msg.text;
-              this.prevTransEl.style.opacity = String(this._prevOpacity);
-              this.syncPrevTrans();
-            }
-            if (this.transEl) { this.transEl.textContent = ''; this.transEl.style.display = 'none'; }
+          if (s === this.lastDoneSeq && this.prevTransEl) {
+            this.prevTransEl.textContent = msg.text;
+            this.prevTransEl.style.opacity = String(this._prevOpacity);
+            this.syncPrevTrans();
+            // 坑：不清 transEl——seq 路由保证当前行只装"当前句"（seq=lastDoneSeq+1）
+            // 的流式译文，定稿属于上一句，清当前行只会把进行中的实时译文闪没。
           }
           if (this._lookbackEnabled) {
-            // 回看缓冲按 seq 精确配对。坑：FW_CT 消息经 bg 扇出到 tab 与悬浮窗两个端，
-            // 端到端到达顺序不保证（实测悬浮窗上 TRANSLATION_FINAL 可能先于
-            // SENTENCE_DONE 抵达）——此时该句还没入缓冲，bySeq 必然落空。
-            // 用最近完成句的 seq 邻域兜底：s 落在 [lastDoneSeq-8, lastDoneSeq+1] 内
-            // 就挂"最早一条无译文句"（FIFO，最老的缺口最可能就是它）；
-            // 超出邻域的补译才严格按 seq 配对，对不上挂最早缺口。
+            // 回看缓冲按 seq 精确配对。坑：FW_CT 经 bg 扇出到 tab 与悬浮窗两端，
+            // 端上到达顺序不保证（实测悬浮窗可能先收到 TRANSLATION_FINAL 后收到
+            // SENTENCE_DONE）——该句还没入缓冲时按 seq 配对必落空，此时退回
+            // "最早一条无译文句"兜底（FIFO，最老的缺口最可能就是它）。
             let target: { text: string; tr?: string; seq?: number } | undefined;
             if (s > 0) target = this.recentSentences.find(x => x.seq === s && !x.tr);
             if (!target) target = this.recentSentences.find(x => !x.tr);

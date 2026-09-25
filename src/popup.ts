@@ -90,6 +90,9 @@ let currentLang = 'zh_CN';
 // 精确配对；不持久化（storage 侧历史由 bg 按"尾部偏移"归位，见 background.ts 注释）
 interface TranscriptEntry { text: string; ts: number; tr?: string; seq?: number }
 let transcriptEntries: TranscriptEntry[] = [];
+// 本 popup 生命周期内见过的最大句序号：SENTENCE_DONE 的 seq 回绕（小于等于它）
+// 即"用户重启了会话"，旧条目的 seq 全部作废（见 SENTENCE_DONE 分支注释）
+let maxSeqSeen = 0;
 const PREFS_KEY = 'tmspeech_prefs';
 const TRANSCRIPT_KEY = 'tmspeech_transcript';
 
@@ -1379,7 +1382,13 @@ chrome.runtime.onMessage.addListener((msg) => {
       // 渲染（无时标）；storage 里的权威条目由 bg appendTranscript 统一写 ts
       // seq：句序号（offscreen 原样送达），TRANSLATION_FINAL 据此精确配对译文；
       // 旧消息无 seq 时为 0，配对退回"末条"旧语义
-      transcriptEntries.push({ text: String(msg.text ?? ''), ts: Number(msg.ts) || 0, seq: Number(msg.seq) || 0 });
+      const seq = Number(msg.seq) || 0;
+      // 坑：popup 开着时用户可能重启识别会话，seq 从 1 重新计数，与上一场条目撞号
+      // → 译文按 seq 配对会挂到上一场的句子上。检测到回绕就抹掉旧条目的 seq
+      //（旧场定稿此刻必已交付完：会话重启会清空翻译队列与积压，无迟到回包）。
+      if (seq > 0 && seq <= maxSeqSeen) transcriptEntries.forEach(e => { delete e.seq; });
+      if (seq > maxSeqSeen) maxSeqSeen = seq;
+      transcriptEntries.push({ text: String(msg.text ?? ''), ts: Number(msg.ts) || 0, seq });
       renderTranscript();
       break;
     }

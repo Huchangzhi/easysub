@@ -146,13 +146,14 @@ function attachTranscriptTranslation(text: string, seq?: number) {
       const arr = ((r[TRANSCRIPT_KEY] as unknown[]) || []).map(normalizeTranscriptEntry);
       let target: TranscriptEntry | undefined;
       if (typeof seq === 'number' && seq > 0) {
-        // seq 从 1 起、条目按句追加：同会话内第 seq 条即目标。历史遗留条目（旧会话/无 seq）
-        // 会让下标错位，这里以"从尾部数第 N 条"归位（N = 总条数 - seq），对不齐就退回末条。
+        // seq 从 1 起、条目按句追加：本会话第 seq 条即"从尾部数第 seq 条"
+        //（storage 跨会话累积，但条目只增不删（裁剪只去最老），尾部对齐恒成立）。
         const backIdx = arr.length - seq;
         if (backIdx >= 0 && backIdx < arr.length) target = arr[backIdx];
-        if (!target || target.tr) target = arr[arr.length - 1];
+        // 坑：目标条目已有译文时不许挪位到"末条"——末条可能是更新的句子，
+        // 挪位即错挂（重复交付已在 offscreen 队列层拦截，这里是最后防线）。
       } else {
-        target = arr[arr.length - 1];
+        target = arr[arr.length - 1]; // 无 seq 的旧消息：退回"末条"旧语义
       }
       if (target && !target.tr) target.tr = String(text);
       await chrome.storage.local.set({ [TRANSCRIPT_KEY]: arr });

@@ -113,6 +113,10 @@ const BACKLOG_MAX = 8;
 const STREAM_COOLDOWN_MS = 500;
 let transLastStreamAt = 0;
 let transCooldownTimer: any = null;
+// 会话代次：随请求下发给 worker 并原样回传，对账时校验。每次翻译状态整体复位
+// （INIT/STOP/测试取消）都递增——INIT 可能复用 offscreen 文档（worker 不重建），
+// 上一场在途请求的回包会迟到，其 seq 与新会话的小序号撞号时全靠 gen 区分。
+let transGen = 0;
 
 function dropStaleBest() {
   // 只保留活跃窗口内的 seq（当前句 + 上一句 + backlog 窗口），防 Map 无界增长
@@ -132,22 +136,17 @@ function createTranslateWorker() {
       finishTranslateTest({ ok: !!m.ok && !!m.text, text: m.text || '', error: m.reason === 'no-model' ? 'no-model' : (m.error || ''), debug: m.debug });
       return;
     }
-    // 坑：回包必须与请求对账，防 terminate/重建后旧回包冲状态。但只按 seq 对账——
-    // 实测发现 opus-mt 的 tokenizer/生成会对文本做规范化改写（大小写/标点/空格），
-    // 按 text 全等比对会让几乎所有回包对不上号而被整体丢弃（表现为一条译文都出不来）。
-    // seq 在 worker 是原样回传的，作为对账键足够：串行 worker 下同一 seq 的乱序回包
-    // 只可能是同一请求；kind 差异（final↔stream）由 onTranslationResult 按 seq 归位处理。
-    if (inFlight && m.seq === inFlight.seq) {
+    // 坑：回包按 seq + 会话代次对账。实测发现 opus-mt 的 tokenizer/生成会对文本做
+    // 规范化改写（大小写/标点/空格），按 text 全等比对会让几乎所有回包对不上号而被
+    // 整体丢弃（表现为一条译文都出不来）。worker 原样回传 seq/gen：串行单在途下，
+    // 同 seq 的回包只可能来自当前请求；gen 挡住跨会话（INIT 复用 worker）的撞号回包。
+    if (e.target !== translateWorker) return; // 已 terminate/替换的旧 worker 残留回包
+    if (inFlight && m.seq === inFlight.seq && m.gen === transGen) {
       const done = inFlight;
       inFlight = null;
-      if (done.kind === 'stream' && m.kind !== 'stream') {
-        // 请求 stream 却回了 final 等异常形态：保守按 stream 语义交付，防覆盖定稿
-        onTranslationResult({ kind: 'stream', seq: done.seq, text: done.text }, m);
-      } else {
-        onTranslationResult(done, m);
-      }
+      onTranslationResult(done, m);
     } else if (inFlight) {
-      log(`翻译回包对不上号：在途 seq=${inFlight.seq}/${inFlight.kind}，回包 seq=${m.seq}/${m.kind}，丢弃`);
+      log(`[译] 回包对不上号：在途 seq=${inFlight.seq}/${inFlight.kind}，回包 seq=${m.seq}/${m.kind}，丢弃`);
     }
     pumpTranslate();
   };
@@ -184,42 +183,51 @@ function onTranslationResult(job: { kind: 'final' | 'stream'; seq: number; text:
     translateWarned = true;
     log('翻译出错: ' + m.error);
   }
-  if (prev == null && !m.ok) bestBySeq.delete(job.seq); // 失败不留占位
   dropStaleBest();
 }
 
 // —— 队列泵：worker 空闲时按优先级取下一个任务 ——
-// 选取顺序：final（1）> stream（2）> backlog（3）；同优先级按入队先后（FIFO）。
-// final 入队时天然只有一个（同一时刻只有"刚完成句"需要定稿），backlog 保序即可。
+// 选取顺序：final（1）> stream（2，受冷却限流）> backlog（3）。
 // 坑：必须在"置 inFlight 之后"才 postMessage，且泵函数自身幂等（inFlight 非空即退），
 // 防止 onmessage 与 enqueue 并发重入造成双发。
 function pumpTranslate() {
   if (!translateWorker || !translateEnabled || inFlight) return;
-  // 优先级 1+2：final / stream（先入先出）；backlog 只在两者皆无时取最老的。
-  // 注意 stream 任务在提交时作废流式槽：槽里更新的中间态会在下次泵时重新成为任务，
-  // 保证"翻出去的版本不早于提交瞬间屏上的文本"，且同一时刻至多一条 stream 在途。
   let job: TransJob | null = null;
   let idx = -1;
+  let fromSlot = false;
+  // 优先级 1：定稿（上一句）——最高优先，绝不被冷却或积压拖延
   for (let i = 0; i < transQueue.length; i++) {
-    const j = transQueue[i];
-    if (j.kind === 'final' || j.kind === 'stream') { job = j; idx = i; break; }
+    if (transQueue[i].kind === 'final') { job = transQueue[i]; idx = i; break; }
   }
-  if (!job) {
-    for (let i = 0; i < transQueue.length; i++) {
-      if (transQueue[i].kind === 'backlog') { job = transQueue[i]; idx = i; break; }
+  // 优先级 2：实时流式。冷却在这里统一检查（translateStream 只更新槽）：
+  // 回包驱动的重泵也走这里，短文本回包快于冷却间隔时不会退化成"每包必翻"。
+  // 槽永远只装最新中间态，被覆盖的旧版本就是被跳过的过时翻译（A/AB 语义）。
+  if (!job && streamSlot && translationTiming === 'stream') {
+    const wait = STREAM_COOLDOWN_MS - (Date.now() - transLastStreamAt);
+    if (wait > 0) {
+      if (!transCooldownTimer) {
+        transCooldownTimer = setTimeout(() => { transCooldownTimer = null; pumpTranslate(); }, wait);
+      }
+    } else {
+      job = { kind: 'stream', seq: streamSlot.seq, text: streamSlot.text, at: Date.now() };
+      fromSlot = true;
     }
   }
+  // 优先级 3：以往积压补译（流式冷却的空档里跑，worker 不空转）。
+  // 坑：同句的 final 可能已交付（bestBySeq 有记录）而 backlog 还排在队列里
+  // （入队时它尚无结果）——不在这里拦截就会二次下发同一句定稿，popup 的
+  // "末条无译文"兜底会把它挂到更新的句子上（审查发现的实际错挂路径）。
   if (!job) {
-    // 队列空：若流式槽有货，把最新中间态转成 STREAM 任务（合并语义：只翻最新版）
-    if (streamSlot && translationTiming === 'stream') {
-      job = { kind: 'stream', seq: streamSlot.seq, text: streamSlot.text, at: Date.now() };
-      streamSlot = null;
-    } else return;
-  } else if (job.kind === 'stream') {
-    streamSlot = null;
+    for (let i = 0; i < transQueue.length; i++) {
+      const j = transQueue[i];
+      if (j.kind !== 'backlog') continue;
+      if (bestBySeq.has(j.seq)) { transQueue.splice(i, 1); i--; continue; }
+      job = j; idx = i; break;
+    }
   }
-  if (idx >= 0) transQueue.splice(idx, 1);
-  if (job.kind === 'stream') transLastStreamAt = Date.now(); // 流式冷却计时起点
+  if (!job) return;
+  if (fromSlot) { streamSlot = null; transLastStreamAt = Date.now(); }
+  else if (idx >= 0) transQueue.splice(idx, 1);
   inFlight = { kind: job.kind === 'backlog' ? 'final' : job.kind, seq: job.seq, text: job.text };
   log(`[译] 提交 seq=${job.seq}/${job.kind} "${job.text.slice(0, 24)}" 队列余=${transQueue.length}${streamSlot ? ' 槽有货' : ''}`);
   translateWorker.postMessage({
@@ -229,6 +237,9 @@ function pumpTranslate() {
     direction: translateDirection,
     // backlog 按定稿（kind:'final'）发给 worker：补译结果走 TRANSLATION_FINAL 通道
     kind: job.kind === 'backlog' ? 'final' : job.kind,
+    // 会话代次：INIT 复用 worker 时 resetTranslationState 清了 inFlight 但旧请求
+    // 仍在 worker 里跑，其回包的 seq 可能撞上新会话的小序号——gen 挡住这种跨场误配
+    gen: transGen,
     wasmPaths: chrome.runtime.getURL('ort-wasm/'),
   });
 }
@@ -294,6 +305,7 @@ function resetTranslationState() {
   if (transCooldownTimer) { clearTimeout(transCooldownTimer); transCooldownTimer = null; }
   transLastStreamAt = 0;
   sentenceSeq = 1;
+  transGen++; // 作废所有在途回包（见 transGen 声明处注释）
 }
 
 function destroyTranslateWorker() {
@@ -341,20 +353,10 @@ function translateStream(text: string) {
   // 与在途/已入队的最新中间态相同则跳过（去重，不丢新内容）
   if (inFlight?.kind === 'stream' && inFlight.seq === sentenceSeq && inFlight.text === text) return;
   if (streamSlot && streamSlot.seq === sentenceSeq && streamSlot.text === text) return;
-  // 流式冷却：间隔不足时只刷新槽（新文本自然覆盖旧文本=过时版本被跳过），
-  // 由到期定时器重入泵。注意冷却只挡 stream——final/backlog 不受限，
-  // 句子定稿的译文绝不因冷却而延迟。
-  const wait = STREAM_COOLDOWN_MS - (Date.now() - transLastStreamAt);
+  // 只更新槽：槽永远持有最新中间态，旧版本被覆盖即"过时跳过"（用户指定的 A/AB 语义）。
+  // 流式冷却在泵的槽转换处统一检查——这里不查，否则回包驱动的泵路径会绕过冷却，
+  // 实测短文本回包快于 500ms 时节奏退化成"每条回包都翻"，字幕延迟回升到 3s。
   streamSlot = { text, seq: sentenceSeq };
-  if (wait > 0) {
-    if (!transCooldownTimer) {
-      transCooldownTimer = setTimeout(() => {
-        transCooldownTimer = null;
-        pumpTranslate();
-      }, wait);
-    }
-    return;
-  }
   pumpTranslate();
 }
 
@@ -368,17 +370,14 @@ function translateFinal(text: string) {
   if (!translateEnabled || !translateWorker || translateWarned || !text) return;
   const seq = sentenceSeq;
   // 作废该句残留的流式任务：队列里的 STREAM 中间态 + 未提交的流式槽。
-  // 注意不能动其它句的 backlog 任务（那是丢译文的旧病根）。
+  // 坑：不能清 inFlight！worker 里那条 stream 请求还在跑，清了之后泵会把 final
+  // 提交上去，stream 回包先到时按 seq 会撞上 final 的在途记账——半截译文被误当
+  // 定稿交付，真正的 final 回包反而对不上号被丢（审查发现的实际丢译文路径）。
+  // 正确做法：让 stream 回包自然返回（seq 已推进不显示），final 排在其后提交。
   for (let i = transQueue.length - 1; i >= 0; i--) {
     if (transQueue[i].kind === 'stream' && transQueue[i].seq === seq) transQueue.splice(i, 1);
   }
   if (streamSlot && streamSlot.seq === seq) streamSlot = null;
-  // 该句的在途流式请求已经没有意义（马上会被同一 seq 的定稿覆盖），作废对账：
-  // 回包到达时 seq 相同但请求已按 final 记账——这里直接清掉，让定稿任务顶上。
-  if (inFlight && inFlight.kind === 'stream' && inFlight.seq === seq) {
-    inFlight = null;
-    // 作废在途后立即补翻该句定稿：绝不等"回包空转一圈"
-  }
   const finalText = normalizeForTranslate(text);
   transQueue.push({ kind: 'final', seq, text: finalText, at: Date.now() });
   pumpTranslate();
