@@ -316,6 +316,13 @@ export class Overlay {
             this.syncPrevTrans();
           }
           this.transEl.textContent = '';
+        } else if (this.prevTransEl && this.prevTransEl.textContent) {
+          // 坑（实测反馈）：当前句没有可移交的译文时（句说得快、流式译文没赶上、
+          // 或仅定稿模式），上一句译文槽里挂的还是"上上句"的译文——上一句文本
+          // 已换成新句，译文却停在旧句，错位悬挂。这里必须清空，
+          // 等本句定稿译文经 TRANSLATION_FINAL 归位后再显示。
+          this.prevTransEl.textContent = '';
+          this.syncPrevTrans();
         }
         if (this.transEl) this.transEl.style.display = 'none';
         break;
