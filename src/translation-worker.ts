@@ -146,11 +146,13 @@ self.onmessage = (e: MessageEvent) => {
   // epoch：发出时所属的流式代次，原样回传。offscreen 侧用它判断这份中间态译文
   // 是否已被"定稿/重启"作废（作废的译文继续显示会覆盖刚到的定稿译文）。
   const epoch = msg.epoch;
+  // gen：offscreen 会话代次，原样回传供回包对账（挡跨会话撞号回包）。
+  const gen = msg.gen;
   (async () => {
     try {
       const text = await translate(String(msg.text ?? ''), msg.direction || 'auto', msg.maxNewTokens ?? 128);
       postMessage({
-        type: 'TRANSLATION', id, kind, seq, epoch,
+        type: 'TRANSLATION', id, kind, seq, epoch, gen,
         text, ok: text != null,
         reason: text == null ? 'no-model' : null,
         error: null,
@@ -158,7 +160,7 @@ self.onmessage = (e: MessageEvent) => {
         debug: text == null ? lastNoModelDebug : null,
       });
     } catch (err: any) {
-      postMessage({ type: 'TRANSLATION', id, kind, seq, epoch, text: null, ok: false, reason: 'error', error: err?.message || String(err), test: msg.test });
+      postMessage({ type: 'TRANSLATION', id, kind, seq, epoch, gen, text: null, ok: false, reason: 'error', error: err?.message || String(err), test: msg.test });
     }
   })();
 };
