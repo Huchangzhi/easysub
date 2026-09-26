@@ -1,0 +1,17 @@
+<!-- 纯 Web 版独有的页面头部：说明这是什么、以及字幕浮窗的开关与说明。
+     扩展 popup 是 380px 弹窗，没有这块；Web 版是整页，需要一个标题区交代上下文。
+     这里用的都是 ui.css 已有的类与变量，不引入第二套样式体系。 -->
+<div class="web-header">
+  <div class="web-brand">
+    <img src="logo.jpg" alt="易字幕" width="32" height="32">
+    <div class="web-brand-text">
+      <h1>易字幕 <span class="web-badge" data-key="webTitleSuffix">网页版</span></h1>
+      <p data-key="webFloatHint">字幕显示在独立的浮窗里，可以拖到任何位置、缩放到任意大小，也可以置顶盖在其他窗口上方。窗口随识别会话自动打开。</p>
+    </div>
+  </div>
+  <div class="web-actions">
+    <button type="button" id="btnWebOpenFloat" class="icon-btn" data-key="webFloatOpen">打开字幕浮窗</button>
+  </div>
+</div>
+
+<div class="web-note" id="webNote" data-key="webModelNote">识别模型约 412MB，首次使用点「开始」时按引导下载或导入一次，之后长期有效。</div>

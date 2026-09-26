@@ -1,3 +1,7 @@
+// 语言读写走平台层 storage：扩展=chrome.storage.local，Web=localStorage。
+// 同一个键名 tmspeech_lang 两端共用，调用方无需关心宿主。
+import { storage } from './platform';
+
 const strings: Record<string, Record<string, string>> = {
   zh_CN: {
     appTitle: '易字幕 开发版本',
@@ -195,6 +199,19 @@ const strings: Record<string, Record<string, string>> = {
     floatUnpin: '取消置顶',
     floatFontUp: '放大字号',
     floatFontDown: '缩小字号',
+    // —— 纯 Web 版专有文案（扩展侧用不到，两端共用同一份语言表）——
+    webFloatTitle: '字幕浮窗',
+    webFloatHint: '字幕显示在独立的浮窗里，可以拖到任何位置、缩放到任意大小，也可以置顶盖在其他窗口上方。窗口随识别会话自动打开。',
+    webFloatOpen: '打开字幕浮窗',
+    webFloatClose: '关闭字幕浮窗',
+    webFloatAuto: '开始识别时自动打开',
+    webSourceTip: '在网页里就能用：捕获系统音频或麦克风，字幕显示在浮窗中。',
+    webNeedSecureContext: '浏览器要求安全上下文才能采集音频：请用 https:// 打开本页，或在本机用 http://localhost 访问。',
+    webModelNote: '识别模型约 412MB，首次使用点「开始」时按引导下载或导入一次，之后长期有效（删除浏览器数据会需要重新导入）。',
+    webTitleSuffix: '网页版',
+    webModelPendingRetry: '识别模型已就绪，请再点一次「开始」启动识别。',
+    webNoIsolation: '当前页面未处于「跨源隔离」状态，语音识别无法启动（识别引擎需要共享内存）。静态托管请确保 coi-serviceworker.js 与 index.html 同目录、且首次访问允许自动刷新一次；若托管方支持自定义响应头，请下发 Cross-Origin-Opener-Policy: same-origin 与 Cross-Origin-Embedder-Policy: require-corp。',
+    webIsolationOk: '跨源隔离已启用',
   },
   en: {
     appTitle: 'EasySub 开发版本',
@@ -372,18 +389,31 @@ const strings: Record<string, Record<string, string>> = {
     floatUnpin: 'Unpin',
     floatFontUp: 'Increase font size',
     floatFontDown: 'Decrease font size',
+    // —— Web-only strings (unused by the extension; one shared language table) ——
+    webFloatTitle: 'Subtitle window',
+    webFloatHint: 'Subtitles appear in a separate window you can move anywhere, resize freely, and pin on top of other apps. It opens automatically with a recognition session.',
+    webFloatOpen: 'Open subtitle window',
+    webFloatClose: 'Close subtitle window',
+    webFloatAuto: 'Opens automatically when recognition starts',
+    webSourceTip: 'Runs right in the browser: capture system audio or your microphone, subtitles show in the floating window.',
+    webNeedSecureContext: 'Audio capture requires a secure context: open this page over https://, or use http://localhost on this machine.',
+    webModelNote: 'The speech model is about 412MB. On first use, press Start and follow the prompt to download or import it once — it then persists (clearing browser data requires re-importing).',
+    webTitleSuffix: 'Web',
+    webModelPendingRetry: 'The model is ready — press Start once more to begin recognition.',
+    webNoIsolation: 'This page is not cross-origin isolated, so speech recognition cannot start (the engine needs shared memory). For static hosting, make sure coi-serviceworker.js sits next to index.html and allow the one-time auto reload; if your host supports custom headers, send Cross-Origin-Opener-Policy: same-origin and Cross-Origin-Embedder-Policy: require-corp.',
+    webIsolationOk: 'Cross-origin isolation active',
   },
 };
 
 const LANG_KEY = 'tmspeech_lang';
 
 export async function getLang(): Promise<string> {
-  const r = await chrome.storage.local.get(LANG_KEY);
+  const r = await storage.get(LANG_KEY);
   return (r[LANG_KEY] as string) || 'zh_CN';
 }
 
 export async function setLang(lang: string): Promise<void> {
-  await chrome.storage.local.set({ [LANG_KEY]: lang });
+  await storage.set({ [LANG_KEY]: lang });
 }
 
 export async function t(key: string): Promise<string> {

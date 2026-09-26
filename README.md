@@ -49,6 +49,71 @@ npm run build
 
 然后 Chrome → 扩展程序 → 加载已解压的扩展 → 选择 `dist/` 目录。
 
+### 纯 Web 版
+
+同一份源码还能构建出一个**不依赖任何扩展 API 的静态网页版**，可以直接扔到 GitHub Pages、
+对象存储或任意静态服务器上（`npm run build:web` → `dist-web/`）：
+
+```bash
+npm run build:web
+# dist-web/ 即为可托管的静态站点；本地预览：
+npx serve dist-web        # 或 python -m http.server -d dist-web
+```
+
+```bash
+cd dist-web && python -m http.server 8000   # 然后访问 http://localhost:8000
+```
+
+Web 版与扩展版的差别只有三处，识别引擎、标点、翻译、字幕层、控制面板全部是同一份代码：
+
+| | 扩展版 | Web 版 |
+|---|---|---|
+| 音频来源 | 当前标签页 / 系统音频 / 麦克风 | 系统音频 / 麦克风 |
+| 字幕显示 | 页内叠加层，或悬浮字幕窗 | 字幕浮窗（可置顶，`window.open` 独立窗口） |
+| 识别模型 | 包内自带（full/lite）或首次导入 | 首次使用时一键下载或手动导入（存 IndexedDB，之后长期有效） |
+
+> ⚠️ **Web 版必须处于「跨源隔离」状态**。sherpa-onnx 的 wasm 是 pthreads 构建
+> （共享内存 + worker），没有 `crossOriginIsolated` 连初始化都会抛 `DataCloneError`。
+> 具体见下方「跨源隔离」一节。
+
+#### 跨源隔离（Web 版部署必读）
+
+普通网页需要服务端下发两个响应头才能进入隔离态：
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+**GitHub Pages 等静态托管不允许自定义响应头**，所以 `dist-web/` 里带了一个
+`coi-serviceworker.js`：它注册一个 Service Worker，在客户端给同源响应补上这两个头。
+首次访问会自动刷新一次（Service Worker 接管后才生效），之后页面即为隔离态。
+用户无需任何操作。
+
+如果托管方支持自定义头（Cloudflare Pages / Netlify / 自建 nginx），直接用响应头即可，
+`coi-serviceworker.js` 检测到已隔离会自动空转，不会重复刷新。nginx 示例：
+
+```nginx
+add_header Cross-Origin-Opener-Policy same-origin;
+add_header Cross-Origin-Embedder-Policy require-corp;
+```
+
+页面加载时会自检这两个条件，不合格就在说明区直接显示原因与处理办法（不会静默失败）。
+
+#### Web 版与本仓库的长期共存
+
+新增功能请优先加在共享层，两端自动都有：
+
+- 面板 UI：`src/ui-body.html` + `src/ui.css`（扩展 popup 与 Web 面板共用同一份模板），
+  逻辑在 `src/panel.ts`
+- 字幕浮窗：`src/subtitle-shell.html` + `src/subtitle-shell.css` + `src/subtitle-shell.ts`
+- 识别引擎：`src/asr-engine.ts`（含 ASR / 标点 / 翻译队列 / 音频采集 / 延迟与电平测量）
+- 字幕记录：`src/transcript-store.ts`
+- 宿主差异：`src/platform.ts`（storage / URL / 消息总线）+ `src/web/`（Web 宿主接线）
+
+只有真的需要 `chrome.*` 时才在 `src/platform.ts` 里加封装或按 `IS_EXTENSION` 分支；
+**不要在共享模块里直接调 `chrome.*`**，否则 Web 版会跟着一起坏。
+
 ## 技术栈
 
 - **识别引擎**: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx/) WASM 离线推理
@@ -92,10 +157,36 @@ npm run build
                                 └──────────────────────────────┘
 ```
 
+### 代码结构（两版共用）
+
+```
+src/
+  platform.ts        宿主差异的唯一收口（storage / URL 解析 / 消息总线 / 能力探测）
+  asr-engine.ts      识别引擎：ASR + 标点 + 翻译优先级队列 + 音频采集 + 延迟/电平测量
+  mic-capture.ts     麦克风采集（16k 单声道定长出块），两端共用
+  transcript-store.ts 字幕记录持久化（串行写队列 + 裁剪 + 译文按 seq 归位）
+  subtitle-shell.ts  字幕浮窗外壳（叠层 + 工具条 + 画中画置顶），两端共用
+  overlay.ts         字幕叠层本体（拖拽/锁定/回看/延迟指示/译文行）
+  panel.ts           控制面板逻辑            ┐ 与 ui-body.html + ui.css
+  ui-body.html       控制面板 DOM（两端同一份）├ 组成两端的面板
+  ui.css             控制面板样式            ┘
+  background.ts      扩展：SW 路由 / offscreen 与悬浮窗生命周期（Web 版无此角色）
+  offscreen.ts       扩展：只做端口接线，引擎在 asr-engine.ts
+  floating.ts        扩展：悬浮字幕窗宿主（mic 采集端也在这里）
+  popup.ts           扩展：弹窗入口，只负责挂载 panel.ts
+  web/panel.ts       纯 Web：面板入口 + 屏幕共享预取 + 字幕浮窗开合
+  web/host.ts        纯 Web：扮演 background + offscreen 的角色（同页承载引擎）
+  web/subtitle.ts    纯 Web：字幕浮窗宿主
+  web/channel.ts     纯 Web：面板 ↔ 浮窗的跨窗口消息通道（postMessage + 心跳握手）
+web-static/
+  coi-serviceworker.js  Web 版跨源隔离垫片（静态托管无法下发 COOP/COEP）
+```
+
 ### 数据流
 
 1. **音频捕获**: AudioWorklet（`audio-worklet-processor.js`）在独立音频线程读取 tab 音频
-2. **缓冲**: 主线程定时（60ms）从 AudioWorklet 拉取累积音频帧
+2. **缓冲**: 主线程定时（60ms）从 AudioWorklet 拉取累积音频帧；Web 版另有一条 AudioWorklet
+   主动 push 路径（`audio-worklet-processor.js` 里的"双模式出块"），避免后台标签页定时器被节流
 3. **ASR 解码**: `pipeline.feedAudio()` → sherpa-onnx `acceptWaveform()` + `decode()`
 4. **流式文本**: `onTextChanged` → 立即送显示 → `setTimeout(0)` 触发标点恢复
 5. **标点恢复**: CT-Transformer 模型推理（同步阻塞主线程），AudioWorklet 继续缓冲不丢帧

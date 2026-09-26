@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>易字幕 Web</title>
+<style>
+/*__EASYSUB_WEB_CSS__*/
+</style>
+<style>
+/*__EASYSUB_UI_CSS__*/
+</style>
+</head>
+<body data-app="web">
+<!-- 跨源隔离垫片：必须在任何业务脚本之前执行。它注册一个 Service Worker 给同源响应
+     补上 Cross-Origin-Opener-Policy / Cross-Origin-Embedder-Policy，让页面进入
+     crossOriginIsolated 状态——sherpa-onnx 的 wasm 是 pthreads 构建（共享内存 +
+     em-pthread worker），没有这个状态连初始化都会抛 DataCloneError。
+     首次访问会自动刷新一次（SW 接管后才生效），之后即为隔离态。 -->
+<script src="coi-serviceworker.js"></script>
+<div class="container" id="appRoot">
+<!--__EASYSUB_WEB_EXTRAS__-->
+
+<!--__EASYSUB_UI_BODY__-->
+</div>
+<!-- pitfall: 此处不要手写 <script src="panel.js">——HtmlWebpackPlugin 的 inject:true
+     已自动注入 <script defer src="panel.js">，手写会让同一脚本执行两遍：
+     panel.ts 的消息监听器注册两次，每条 SENTENCE_DONE 被处理两次，字幕列表重复。 -->
+</body>
+</html>

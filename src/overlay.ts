@@ -1,4 +1,5 @@
 import { tSync } from './i18n';
+import { storage, sendToHost } from './platform';
 
 // —— 唯一事实源：页内字幕层（content.ts 注入脚本）与系统音频悬浮字幕窗（floating.ts）
 // 共用同一份叠层实现，观感与交互由此天然一致，杜绝双份样式漂移。
@@ -17,6 +18,14 @@ export interface OverlayOptions {
   // ——"字幕窗口与悬浮窗共同调节大小"的核心语义。页内卡片式的自由拖拽与
   // 位置持久化在此模式下无意义（要挪字幕直接挪窗口），一并关闭。
   fill?: boolean;
+  // 填充模式的定位方式：默认 fixed + 100vw/100vh（宿主 = 整个窗口，扩展悬浮窗用）。
+  // 纯 Web 版的字幕舞台只是页面里的一块区域，fixed 的百分比会按视口解析而溢出，
+  // 故置 true 改为 absolute + 100%（宿主元素需自带 position:relative）。
+  absoluteFill?: boolean;
+  // 叠层内点了锁定按钮后的上行通道。扩展 = chrome.runtime.sendMessage（默认实现）；
+  // 纯 Web 版的字幕浮窗与面板是**两个窗口**，chrome 消息不存在，必须换成跨窗口通道，
+  // 否则浮窗里点锁定面板毫无反应（静默失效）。
+  onLockChanged?: (locked: boolean) => void;
 }
 
 const BG_MODES: OverlayBgMode[] = ['glass', 'solid', 'outline'];
@@ -46,6 +55,8 @@ export class Overlay {
   private mountTarget: () => HTMLElement;
   private trackFullscreen: boolean;
   private fill = false;
+  private absoluteFill = false;
+  private onLockChanged: ((locked: boolean) => void) | null;
 
   private overlay: HTMLDivElement | null = null;
   private prevEl: HTMLDivElement | null = null;
@@ -88,6 +99,8 @@ export class Overlay {
     this.storageKey = options.storageKey || 'tmspeech_overlay';
     this.trackFullscreen = options.trackFullscreen !== false;
     this.fill = options.fill === true;
+    this.absoluteFill = options.absoluteFill === true;
+    this.onLockChanged = options.onLockChanged ?? null;
     this.mountTarget = options.mountTarget
       || (() => (this.trackFullscreen ? this.fullscreenMount() : document.body));
     if (this.trackFullscreen) {
@@ -124,7 +137,7 @@ export class Overlay {
     overlay.id = 'tmspeech-overlay';
     this.overlay = overlay;
     const s = overlay.style;
-    s.position = 'fixed';
+    s.position = this.absoluteFill ? 'absolute' : 'fixed';
     s.zIndex = '2147483647';
     s.padding = '24px 32px';
     s.background = 'rgba(10,10,20,0.75)';
@@ -147,8 +160,10 @@ export class Overlay {
       s.left = '0';
       s.top = '0';
       s.transform = 'none';
-      s.width = '100vw';
-      s.height = '100vh';
+      // absoluteFill：宿主是页面里的一块区域而非整个窗口，百分比必须按宿主盒解析，
+      // 用 100vw/100vh 会按视口算而溢出到宿主之外（Web 版字幕舞台用这条）。
+      s.width = this.absoluteFill ? '100%' : '100vw';
+      s.height = this.absoluteFill ? '100%' : '100vh';
       s.minWidth = '0';
       s.maxWidth = 'none';
       s.borderRadius = '0';
@@ -163,11 +178,11 @@ export class Overlay {
     // 同步体内按当前 _overlayBgMode 立即重涂一次；异步回调读到的 prefs 若不同会再次覆盖。
     this.paintOverlayChrome();
 
-    chrome.storage.local.get('tmspeech_locked').then(r => {
+    storage.get('tmspeech_locked').then(r => {
       if (r.tmspeech_locked) { this._locked = true; this.applyLock(); }
     });
 
-    chrome.storage.local.get('tmspeech_prefs').then(r => {
+    storage.get('tmspeech_prefs').then(r => {
       const prefs = (r['tmspeech_prefs'] as any) || {};
       this._showPrev = prefs.showPrev !== false;
       this._prevOpacity = (prefs.prevOpacity ?? 35) / 100;
@@ -181,7 +196,7 @@ export class Overlay {
 
     this.prevEl = document.createElement('div');
     this.textEl = document.createElement('div');
-    chrome.storage.local.get(['tmspeech_prefs', 'tmspeech_lang']).then(r => {
+    storage.get(['tmspeech_prefs', 'tmspeech_lang']).then(r => {
       const prefs = (r['tmspeech_prefs'] as any) || {};
       this._lang = (r['tmspeech_lang'] as string) || 'zh_CN';
       const fs = prefs.fontSize || 36;
@@ -246,7 +261,7 @@ export class Overlay {
       s.top = r.top + 'px';
       s.transform = 'none';
       const key = this.storageKey;
-      chrome.storage.local.get(key).then(stored => {
+      storage.get(key).then(stored => {
         if (!this.overlay) return;
         const d = (stored[key] as any) || {};
         // 坑：只接受 px 值。历史版本可能落盘过 left:'50%' 这类百分比中间态，
@@ -407,7 +422,7 @@ export class Overlay {
         break;
       case 'RESET_OVERLAY_POSITION':
         if (this.fill) break; // 填充模式无独立位置，重置无意义
-        chrome.storage.local.remove(this.storageKey);
+        storage.remove(this.storageKey);
         if (this.overlay) {
           // 重置为屏幕中心。与 create() 同理：先按 50%+translate 定位，再立即换算成
           // 绝对像素并清 transform——不留"left:50% + translate(-50%)"中间态，
@@ -430,10 +445,15 @@ export class Overlay {
   // —— 锁定 ——
   private toggleLock() {
     this._locked = !this._locked;
-    chrome.storage.local.set({ tmspeech_locked: this._locked });
+    storage.set({ tmspeech_locked: this._locked });
     this.applyLock();
-    // 上行到 background 同步给 popup 与另一宿主（内容页/悬浮窗）
-    try { chrome.runtime.sendMessage({ type: 'LOCK_CHANGED_FROM_CONTENT', locked: this._locked }).catch(() => {}); } catch {}
+    // 上行同步给面板与另一宿主（内容页/悬浮窗）。
+    // 扩展默认走 chrome.runtime；Web 宿主通过 onLockChanged 换成跨窗口通道。
+    if (this.onLockChanged) {
+      this.onLockChanged(this._locked);
+      return;
+    }
+    try { sendToHost({ type: 'LOCK_CHANGED_FROM_CONTENT', locked: this._locked }).catch(() => {}); } catch {}
   }
 
   private applyLock() {
@@ -781,7 +801,7 @@ export class Overlay {
     // 此刻保存的 height 落盘后，下次恢复会把收起态的字幕框撑成一坨空白——
     // 展开期间跳过保存即可（位置 left/top 在拖拽释放时另行保存，不受影响）。
     if (!this.overlay || this.reviewOpen) return;
-    chrome.storage.local.set({
+    storage.set({
       [this.storageKey]: {
         left: this.overlay.style.left,
         top: this.overlay.style.top,

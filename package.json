@@ -5,7 +5,11 @@
   "scripts": {
     "download-wasm": "pwsh -ExecutionPolicy Bypass -File scripts/download-wasm.ps1",
     "build": "webpack --mode production",
-    "dev": "webpack --mode development --watch"
+    "build:web": "webpack --mode production --env target=web",
+    "dev": "webpack --mode development --watch",
+    "dev:web": "webpack --mode development --watch --env target=web",
+    "typecheck": "tsc --noEmit",
+    "serve:web": "node scripts/serve-web.js"
   },
   "devDependencies": {
     "@types/chrome": "^0.2.2",

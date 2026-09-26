@@ -43,7 +43,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
         run: |
           V=${{ github.event.inputs.version }}
-          sed -i "s/开发版本/v$V/g" src/popup.html src/i18n.ts
+          sed -i "s/开发版本/v$V/g" src/ui-body.html src/i18n.ts
           sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" package.json
           sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" manifest.json
 
@@ -53,6 +53,62 @@ jobs:
         with:
           name: extension${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' && format('-v{0}', github.event.inputs.version) || '' }}
           path: dist/
+
+  # 纯 Web 版（可静态托管）：与扩展构建**完全独立**——不进 releases、不参与 release job 的
+  # needs，只作为一个单独命名的 artifact 上传，避免动到现有发布流程。
+  #
+  # 关键差异：
+  #   - 不打包 412MB 的识别模型 .data（GitHub Pages 单文件上限 100MB），webpack 侧已排除，
+  #     用户首次使用时在面板里一键下载或手动导入（存 IndexedDB，之后长期有效）；
+  #   - 产物目录是 dist-web/，zip 内含 index.html 与 coi-serviceworker.js，
+  #     解压即可托管（详见 README 的「纯 Web 版」一节）。
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      # Web 版同样需要 sherpa-onnx 的 wasm/loader 脚本；.data 会被 web 构建排除，
+      # 这里下载整包只是为了拿到 sherpa-onnx-wasm-main-asr.wasm 与三个加载器脚本。
+      - name: Download sherpa-onnx WASM
+        run: |
+          TMPDIR=$(mktemp -d)
+          curl -sL             "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"             | tar xj -C "$TMPDIR"
+          mkdir -p public/wasm
+          find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
+          rm -rf "$TMPDIR"
+          git restore public/wasm/sherpa-onnx-asr.js public/wasm/sherpa-onnx-punctuation.js
+          rm -f public/wasm/index.html public/wasm/app-asr.js
+
+      - name: Set release version
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
+        run: |
+          V=${{ github.event.inputs.version }}
+          sed -i "s/开发版本/v$V/g" src/ui-body.html src/i18n.ts
+          sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" package.json
+
+      - run: npm run build:web
+
+      - name: Package web build
+        run: |
+          cd dist-web
+          zip -r ../easysub-web${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' && format('-v{0}', github.event.inputs.version) || '' }}.zip .
+          cd ..
+          ls -lh easysub-web*.zip
+          # 体积守卫：web 包不该出现 412MB 的模型（出现即说明 webpack 排除规则失效）
+          if unzip -l easysub-web*.zip | grep -q 'sherpa-onnx-wasm-main-asr.data'; then
+            echo "::error::web 构建里混进了识别模型 .data，检查 webpack.config.js 的 ignore 规则"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' && format('-v{0}', github.event.inputs.version) || '' }}
+          path: easysub-web*.zip
 
   build-lite:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
@@ -81,7 +137,7 @@ jobs:
       - name: Set release version
         run: |
           V=${{ github.event.inputs.version }}
-          sed -i "s/开发版本/v$V/g" src/popup.html src/i18n.ts
+          sed -i "s/开发版本/v$V/g" src/ui-body.html src/i18n.ts
           sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" package.json
           sed -i "s/\"version\": \".*\"/\"version\": \"$V\"/" manifest.json
 

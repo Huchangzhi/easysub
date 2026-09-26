@@ -1,4 +1,7 @@
 import { t } from './i18n';
+// 字幕记录的读写全部收敛在 transcript-store（与纯 Web 版共用同一份实现）；
+// 这里只需要追加与挂译文两个入口，其余导出留给未来可能用到的地方。
+import { appendTranscript, attachTranscriptTranslation } from './transcript-store';
 const PENDING_KEY = 'pendingInit';
 // offscreen 文档"当前装的是哪套识别配置"的指纹（见 startRecognition 的复用判定）。
 // 识别配置（语言/标点/端点阈值/热词）在 createOnlineRecognizer 时一次性烘焙进 WASM，
@@ -103,83 +106,6 @@ function persistSession() {
   } else {
     chrome.storage.session.remove(SESSION_KEY).catch(() => {});
   }
-}
-
-// 坑：storage.local 的 get→push→set 是三步非原子操作，两条 SENTENCE_DONE 交错执行时
-// 后写会整体覆盖前写、丢掉一句转写。改为 promise 链串行化：同一时刻只允许一个读改写
-// 在途，后续追加排队等待（链条内所有异常都被捕获，队列永不 reject、不会卡死）。
-// 坑：数组原本只增不减，每句都把整个数组重新序列化写入（累计 O(n²)），且 storage.local
-// 配额 10MB，长会话触顶后 set 永久静默失败、转写从此停止记录。写入前裁剪到上限，
-// 只保留最近 TRANSCRIPT_MAX 条。
-const TRANSCRIPT_KEY = 'tmspeech_transcript';
-const TRANSCRIPT_MAX = 1000;
-let transcriptQueue: Promise<void> = Promise.resolve();
-// 条目契约：{ text: string, ts: number }。ts=Date.now()（句完成时刻）；
-// ts=0 是"legacy 无时标"的哨兵值——popup 显示/导出侧据此决定是否渲染时间戳。
-// tr?: 该句定稿译文，由 TRANSLATION_FINAL 在换句后挂到末条原句上，供历史列表显示。
-type TranscriptEntry = { text: string; ts: number; tr?: string };
-function normalizeTranscriptEntry(entry: unknown): TranscriptEntry {
-  // 坑：legacy 格式原因——旧版本把转写存成纯字符串数组且无迁移脚本，升级后存储里
-  // 会长期残留字符串条目。所有读取点必须做 typeof entry === 'string' 的懒归一化
-  // （归一化结果随后随整组写回，老数据在首次追加后即被逐步原地迁移），否则显示侧
-  // 读到 .text/.ts 属性就是 undefined，直接炸 UI。
-  if (typeof entry === 'string') return { text: entry, ts: 0 };
-  const e = entry as Partial<TranscriptEntry>;
-  return {
-    text: typeof e.text === 'string' ? e.text : '',
-    ts: typeof e.ts === 'number' ? e.ts : 0,
-    tr: typeof e.tr === 'string' && e.tr ? e.tr : undefined,
-  };
-}
-
-// 换句后的定稿译文挂到历史原句上。旧实现无条件挂"末条"：一旦 offscreen 积压
-// （慢速机器/长句推理），TRANSLATION_FINAL 迟到时 popup 里可能已插入了更新的句子，
-// 译文就会被挂错句——这正是"记录里部分句子翻译丢失/错位"的成因。
-// 现在条目带 seq（offscreen 随 SENTENCE_DONE 原样送达），译文按 seq 精确配对；
-// seq 缺失（旧消息/异常路径）才退回"末条无译文"的旧语义。
-// 走同一串行队列，避免与 appendTranscript 的读改写并发互相覆盖丢数据。
-function attachTranscriptTranslation(text: string, seq?: number) {
-  if (!text) return;
-  transcriptQueue = transcriptQueue.then(async () => {
-    try {
-      const r = await chrome.storage.local.get(TRANSCRIPT_KEY);
-      const arr = ((r[TRANSCRIPT_KEY] as unknown[]) || []).map(normalizeTranscriptEntry);
-      let target: TranscriptEntry | undefined;
-      if (typeof seq === 'number' && seq > 0) {
-        // seq 从 1 起、条目按句追加：本会话第 seq 条即"从尾部数第 seq 条"
-        //（storage 跨会话累积，但条目只增不删（裁剪只去最老），尾部对齐恒成立）。
-        const backIdx = arr.length - seq;
-        if (backIdx >= 0 && backIdx < arr.length) target = arr[backIdx];
-        // 坑：目标条目已有译文时不许挪位到"末条"——末条可能是更新的句子，
-        // 挪位即错挂（重复交付已在 offscreen 队列层拦截，这里是最后防线）。
-      } else {
-        target = arr[arr.length - 1]; // 无 seq 的旧消息：退回"末条"旧语义
-      }
-      if (target && !target.tr) target.tr = String(text);
-      await chrome.storage.local.set({ [TRANSCRIPT_KEY]: arr });
-    } catch (e) {
-      console.log('[TM BG] 转写译文持久化失败:', e);
-    }
-  });
-}
-
-function appendTranscript(text: string, ts: number = Date.now()) {
-  transcriptQueue = transcriptQueue.then(async () => {
-    try {
-      const r = await chrome.storage.local.get(TRANSCRIPT_KEY);
-      // 坑：这是本文件唯一的存储读取点，必须先归一化再操作——混存的老字符串条目
-      // 若不做映射，裁剪与后续整组写回会把 legacy 数据原样续存，显示侧永远读到脏格式。
-      const arr = ((r[TRANSCRIPT_KEY] as unknown[]) || []).map(normalizeTranscriptEntry);
-      // 坑：必须用入参 ts——队列内再取 Date.now() 会在积压时漂移，入库时刻与
-      // 转发给 popup 的盖章时刻分叉，重开面板后时标对不上实时所见
-      arr.push({ text, ts });
-      if (arr.length > TRANSCRIPT_MAX) arr.splice(0, arr.length - TRANSCRIPT_MAX);
-      await chrome.storage.local.set({ [TRANSCRIPT_KEY]: arr });
-    } catch (e) {
-      // 配额触顶/存储异常不再静默：至少留一条日志可查。
-      console.log('[TM BG] 转写持久化失败:', e);
-    }
-  });
 }
 
 // 坑：hasDocument() 与 createDocument() 之间没有互斥（TOCTOU）。START 与"测试翻译"
@@ -295,7 +221,7 @@ chrome.runtime.onConnect.addListener((port) => {
       // 定稿译文：offscreen 每句完成时经 FW_POP 送来，按 seq 挂到对应历史原句
       // （seq 缺失时退回"末条"旧语义）；同时照常转发 popup
       if (p.type === 'TRANSLATION_FINAL') {
-        attachTranscriptTranslation(p.text, p.seq);
+        attachTranscriptTranslation(p.text, p.seq, (e) => console.log('[TM BG] 转写译文持久化失败:', e));
       }
       // 电平快照：popup 关闭时 LEVEL 消息无人消费，这里留着，重开面板时还原最近波形，
       // 避免"每次打开都从空基线重新填充"。钳值防脏；只保留最近 ~7s（60 条 × 120ms）。
@@ -328,7 +254,7 @@ chrome.runtime.onConnect.addListener((port) => {
         // seq 原样透传：popup 的 TRANSLATION_FINAL 也按它精确挂译文，两侧索引一致。
         const ts = Date.now();
         sendToPopup({ ...p, ts });
-        appendTranscript(p.text, ts);
+        appendTranscript(p.text, ts, (e) => console.log('[TM BG] 转写持久化失败:', e));
       }
       if (p.type === 'LOG') console.log('[TM BG]', p.message);
       if (msg.payload?.type === 'REQUEST_STREAM') {
