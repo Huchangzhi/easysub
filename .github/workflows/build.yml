@@ -54,8 +54,9 @@ jobs:
           name: extension${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' && format('-v{0}', github.event.inputs.version) || '' }}
           path: dist/
 
-  # 纯 Web 版（可静态托管）：与扩展构建**完全独立**——不进 releases、不参与 release job 的
-  # needs，只作为一个单独命名的 artifact 上传，避免动到现有发布流程。
+  # 纯 Web 版（可静态托管）：与扩展构建共用同一次 checkout，产物独立成 zip。
+  # 平时（push/PR）只作为 artifact 上传；带版本号的 workflow_dispatch 运行时，
+  # release job 会把 easysub-web-v*.zip 一并发布（见下方 release job 的资产列表）。
   #
   # 关键差异：
   #   - 不打包 412MB 的识别模型 .data（GitHub Pages 单文件上限 100MB），webpack 侧已排除，
@@ -155,7 +156,7 @@ jobs:
 
   release:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
-    needs: [build, build-lite]
+    needs: [build, build-lite, build-web]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -176,6 +177,11 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          name: web-v${{ github.event.inputs.version }}
+          path: web-dist
+
+      - uses: actions/download-artifact@v4
+        with:
           name: extension-lite-v${{ github.event.inputs.version }}
           path: dist-lite
 
@@ -183,6 +189,12 @@ jobs:
         run: |
           cd dist-lite
           zip -r ../easysub-v${{ github.event.inputs.version }}-lite.zip .
+
+      # Web 版 artifact 里就是打包好的 easysub-web-v*.zip，原样移到根目录作为 release 资产
+      - name: Stage web build for release
+        run: |
+          mv web-dist/easysub-web*.zip .
+          ls -lh easysub-web*.zip
 
       - name: Package translation models
         run: |
@@ -219,7 +231,7 @@ jobs:
 
             ### full（默认）
             - 模型: Zipformer 中英双语, fp32 全精度
-            - 大小: ~357MB
+            - 大小: ~412MB
             - 精度更高，适合需要最佳识别质量的场景
 
             ### nomodel（不含识别模型，适合 Edge 商店 / 小体积安装）
@@ -232,6 +244,13 @@ jobs:
             - 大小: ~150MB
             - 体积更小、速度更快，适合资源受限的场景
 
+            ### web（纯网页版，无需安装扩展）
+            - 资产: `easysub-web-v${{ github.event.inputs.version }}.zip`（不含识别模型，仅几 MB）
+            - 解压后托管到任意静态站点（GitHub Pages / 对象存储 / 自建服务器）即可使用
+            - 需要跨源隔离（zip 内自带 coi-serviceworker.js 自动处理，首次访问会刷新一次）
+            - 识别模型约 412MB，首次使用时在页面里一键下载或导入一次（存浏览器 IndexedDB）；
+              也可直接访问在线部署：https://huchangzhi.github.io/easysub/
+
             ### 实时翻译模型（可选，离线，约 216MB）
             启用面板"实时翻译"需要下载此模型包：
             `easysub-translation-models-v${{ github.event.inputs.version }}.zip`
@@ -242,18 +261,19 @@ jobs:
             3. 点击「选择模型」，选中解压出的 `opus-mt-en-zh` / `opus-mt-zh-en` 所在的父文件夹
             4. 重新开始一次识别会话生效（翻译在本地离线进行，不上传任何内容）
 
-            ### 语音识别模型单文件（nomodel 版用户需要）
+            ### 语音识别模型单文件（nomodel 版与 web 版用户需要）
             `sherpa-onnx-wasm-main-asr.data`（约 412MB）
 
             **中国大陆用户访问 GitHub 不畅时，请从 ModelScope 或 Gitee 下载模型：**
             - ModelScope 直链（推荐，速度快）：https://modelscope.cn/models/hcz1017/easysub-model/resolve/master/sherpa-onnx-wasm-main-asr.data
             - Gitee（备用）：https://gitee.com/huchangzhi/easysub-model/releases
 
-            Chrome → 扩展程序 → 加载已解压的扩展 → 选择解压后的目录
+            扩展：Chrome → 扩展程序 → 加载已解压的扩展 → 选择解压后的目录
           files: |
             easysub-v${{ github.event.inputs.version }}-full.zip
             easysub-v${{ github.event.inputs.version }}-nomodel.zip
             easysub-v${{ github.event.inputs.version }}-lite.zip
+            easysub-web-v${{ github.event.inputs.version }}.zip
             easysub-translation-models-v${{ github.event.inputs.version }}.zip
             sherpa-onnx-wasm-main-asr.data
           draft: false

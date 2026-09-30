@@ -144,8 +144,10 @@ add_header Cross-Origin-Embedder-Policy require-corp;
 
 #### 获取与使用
 
-- **CI 产物**：GitHub Actions 的每次构建都会把 `dist-web/` 单独打成 `easysub-web*.zip`
-  上传为 workflow artifact（artifact 名叫 `web`，**不进 Releases、不动现有发布流程**），
+- **发布版**：带版本号的 workflow 运行会把 `easysub-web-v*.zip` 与扩展包一起发布到
+  GitHub Releases（资产名 `web`）。
+- **CI 产物**：日常构建（push / PR / 不带版本号的手动运行）也会把 `dist-web/` 单独打成
+  `easysub-web*.zip` 上传为 workflow artifact（artifact 名叫 `web`），
   下载解压到任意静态目录即可托管。
 - **使用流程**：打开页面 → 环境自检（安全上下文 + 跨源隔离，不合格会在页面说明区给出
   原因与处理办法）→ 点「开始」→ 首次按引导下载或导入识别模型（存 IndexedDB，之后
