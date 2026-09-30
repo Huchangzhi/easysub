@@ -958,6 +958,9 @@ selSource.onchange = () => {
   const v: 'tab' | 'system' | 'mic' =
     selSource.value === 'mic' ? 'mic'
       : selSource.value === 'system' ? 'system' : 'tab';
+  // 换了音源就作废"已确认过系统音频说明"：否则用户确认后切走再切回来，
+  // 会被当成已确认而直接弹选择器（少了一道说明，也违背"每次重新开始都讲一遍"）。
+  pickConfirmPassed = false;
   savePrefs({ audioSource: v });
   updateSourceHint();
 };
@@ -966,15 +969,34 @@ selSource.onchange = () => {
 //   ① 「开始」按钮；
 //   ② 模型刚装好后的续跑（扩展自动续跑；Web 版由引导卡上的主按钮调用，那次点击
 //      才是浏览器认可的新鲜手势，见 manualRestartAfterModel 的注释）。
-// prepareStartResumed：本次 doStart 是否来自系统音频确认框的「打开选择器」点击。
-// 首次点「开始」时先弹确认框，点确认后从新手势重入 doStart 并跳过确认框，
-// 否则两点会互相递归（确认框 → doStart → 又弹确认框）。
-let prepareStartResumed = false;
+//
+// —— 系统音频·选择器前置确认：必须排在**任何取流动作之前** ——
+// 坑（实测"选择器弹两次、选好的流被打断"的根因）：确认框原先挂在 prepareStart
+// **之后**，而 Web 版正是 prepareStart 在用户手势内直接调 getDisplayMedia。于是实际
+// 顺序成了：点开始 → 真选择器弹出（用户选好、preStream 到手）→ 走到确认框分支 →
+// releasePreStream() 把刚选好的流停掉 → 弹确认框 → 点「打开选择器」→ 又弹一次选择器。
+// 现在把确认框提到最前面：弹模态不需要用户手势，用户点「打开选择器」的那一刻才是
+// 真正进入启动流程的手势，选择器全程只弹一次。
+//
+// 标志语义：一旦为 true，后续 doStart 不再重复弹说明，直接进入取流链路。
+// 置 true 的唯一来源是确认框的「打开选择器」；在"用户取消/本次启动已受理"两处清掉。
+// 中途的 modelPending 早退**刻意保留**它：用户已确认过，下完模型点引导卡上的
+// 「开始识别」应当直接弹屏幕选择器，而不是再被问一遍。
+let pickConfirmPassed = false;
 async function doStart(): Promise<void> {
   const pendingSource: 'tab' | 'system' | 'mic' =
     selSource.value === 'mic' ? 'mic'
       : selSource.value === 'system' ? 'system'
       : (HAS_TAB_SOURCE ? 'tab' : DEFAULT_AUDIO_SOURCE);
+  // 系统音频：先把"浏览器不能单独授权音频、画面流授权后立刻销毁、记得勾上分享音频"
+  // 三件事讲清楚，用户点确认后才进入下面的取流链路。
+  // 平台不支持系统音频时不弹它——那种情况由下方 SYSTEM_AUDIO_SUPPORTED 门卫弹
+  // "无法使用系统音频"，先弹确认框只会让用户白读一遍。
+  if (pendingSource === 'system' && SYSTEM_AUDIO_SUPPORTED && !pickConfirmPassed) {
+    sysPickContinuation = () => { pickConfirmPassed = true; void doStart(); };
+    showSysPickModal();
+    return;
+  }
   // 坑（纯 Web 版）：宿主前置动作必须在**本函数最前面**、任何 await 之前发起。
   // getDisplayMedia / window.open 都要求瞬时用户激活，而下面的 ensureAsrModel()
   // 至少要跨一个 fetch，等它返回时手势早已失效，浏览器会直接拒绝采集。
@@ -986,6 +1008,8 @@ async function doStart(): Promise<void> {
     const cancelled = e?.name === 'NotAllowedError' || e?.name === 'AbortError';
     if (!cancelled) log(`${tSync(currentLang, 'errorPrefix')}`.replace('{m}', String(e?.message || e)));
     setStatus('Stopped');
+    // 用户取消了本次启动：清掉确认态，下次点「开始」重新走一遍说明
+    pickConfirmPassed = false;
     // 宿主在 prepareStart 里可能已经预开了字幕浮窗：本次启动已夭折，必须让它收回去，
     // 否则屏幕上留着一个空浮窗（用户以为已经在识别了，其实什么都没跑）。
     hostHooks()?.startAborted?.();
@@ -1006,6 +1030,8 @@ async function doStart(): Promise<void> {
   // 扩展侧恒 false，不受影响（chrome-extension:// 页面豁免该限制）。
   if (preloadNeedIsolation() && !window.crossOriginIsolated) {
     releasePreStream();
+    // 本次启动中止：清掉确认态，下次点「开始」重新走一遍说明
+    pickConfirmPassed = false;
     setStatus('Stopped');
     log(tSync(currentLang, 'webNoIsolation'));
     return;
@@ -1015,11 +1041,12 @@ async function doStart(): Promise<void> {
   // 下载 412MB 模型，下完才发现显示端依然开不出来。
   if ((hostExtras as any)?.displayUnavailable) {
     releasePreStream();
+    pickConfirmPassed = false;
     setStatus('Stopped');
     return;
   }
   // nomodel 版门卫：包内无 .data 且未导入过 → 弹窗中窗引导，导入成功自动继续本次启动
-  if (!(await ensureAsrModel())) { releasePreStream(); return; }
+  if (!(await ensureAsrModel())) { releasePreStream(); pickConfirmPassed = false; return; }
   // 坑：宿主明确告知"这次手势已被模型流程吃掉"（纯 Web 版首次安装模型时必然如此：
   // 下载 412MB 耗时以分钟计，用户激活早已过期，此时再去 getDisplayMedia 必被拒绝）。
   // 不装模作样地继续启动，而是走"装好后请用户再点一次"的显式流程：
@@ -1045,24 +1072,10 @@ async function doStart(): Promise<void> {
     showUnsupportedModal();
     return;
   }
-  // 系统音频·选择器前置确认框（两端都有）：浏览器限制 getDisplayMedia 必须
-  // 画面+音频一起授权，很多用户会因"要共享屏幕"担心隐私而放弃。弹选择器之前
-  // 把限制与"画面流立刻销毁"讲清楚。点「打开选择器」后从**那个 click 手势**里
-  // 重新走 doStart——扩展侧选择器由 offscreen 文档弹（不受手势约束，但保持同一
-  // 交互节奏）；Web 侧的 getDisplayMedia 必须在这个新鲜手势内完成（见 prepareStart）。
-  if (source === 'system' && !prepareStartResumed) {
-    // 本次 doStart 是「开始」按钮触发的（不是确认框续跑）：先收掉已预取的流与浮窗，
-    // 挂上续跑回调再弹确认框。用户点「打开选择器」→ triggerStart 从新手势重入，
-    // 走到这里的 prepareStartResumed 已为 true，直接放行去弹真正的屏幕选择器。
-    releasePreStream();
-    setStatus('Stopped');
-    sysPickContinuation = () => {
-      prepareStartResumed = true;
-      try { void doStart(); } finally { prepareStartResumed = false; }
-    };
-    showSysPickModal();
-    return;
-  }
+  // 系统音频·选择器前置确认框已在 doStart 最前面处理完（见那里的注释），
+  // 走到这里说明用户已确认过，可以直接进入取流/启动。
+  // 本次启动已正式受理：清掉确认态，下次点「开始」重新走一遍说明。
+  pickConfirmPassed = false;
   // 系统音频/麦克风模式不依赖活动标签页（captureTabId 恒 null，字幕走悬浮窗），跳过 noActiveTab 检查
   if (source !== 'tab') {
     // 麦克风授权与采集都发生在悬浮字幕窗（可见页面）：popup 不再碰 getUserMedia——
