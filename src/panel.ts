@@ -99,6 +99,12 @@ const unsupTitle = $('unsupTitle');
 const unsupBody = $('unsupBody');
 const unsupSwitch = $('unsupSwitch') as HTMLButtonElement;
 const unsupClose = $('unsupClose') as HTMLButtonElement;
+// —— 系统音频·选择器前置确认框（两端共用）——
+const sysPickModal = $('sysPickModal') as HTMLDivElement;
+const sysPickTitle = $('sysPickTitle');
+const sysPickBody = $('sysPickBody');
+const sysPickConfirmBtn = $('sysPickConfirm') as HTMLButtonElement;
+const sysPickCancelBtn = $('sysPickCancel') as HTMLButtonElement;
 // 坑：系统音频捕获的支持范围随平台差异很大——getDisplayMedia 选择器的「分享系统音频」
 // 勾选项：Windows/ChromeOS 全版本支持；macOS 自 Chrome 141（且 macOS 14.2+）起支持；
 // Linux/安卓一律不支持（Linux 的 Chromium 明确拒绝采集系统音频）。
@@ -215,6 +221,8 @@ async function applyLang() {
   updateSourceHint();
   // 模态开着时切语言：卡片文案同步刷新（见 fillUnsupportedModalText 注释）
   if (!unsupModal.hidden) fillUnsupportedModalText();
+  // 选择器前置确认框同理：开着时切语言不能停在旧语言
+  if (!sysPickModal.hidden) fillSysPickModalText();
   $('showSubtitles').textContent = tr('showSubtitles');
   $('fontLabel').textContent = tr('font');
   $('modelInfo').textContent = tr('modelInfo');
@@ -876,6 +884,50 @@ unsupSwitch.onclick = () => {
 
 unsupClose.onclick = hideUnsupportedModal;
 
+// —— 系统音频·选择器前置确认框 ——
+// 为什么要有它：浏览器限制 getDisplayMedia 不能只授权音频，必须画面+音频一起勾，
+// 很多用户到这一步会因为"要共享我的屏幕？"担心隐私而直接放弃。在弹选择器之前用
+// 模态框把三件事讲清楚：①这是浏览器硬性限制；②画面流授权后立刻销毁（只有音频
+// 被使用，见 acquireSystemAudioStream）；③选择时必须勾上"同时分享音频"。
+// 时序：模态的「打开选择器」按钮本身就是用户手势，选择器从它的 click 链里弹出
+// （两端各自的取流路径见 sysPickContinue 的调用方）。
+function fillSysPickModalText() {
+  sysPickTitle.textContent = tSync(currentLang, 'sysPickTitle');
+  sysPickBody.textContent = tSync(currentLang, 'sysPickBody');
+  sysPickConfirmBtn.textContent = tSync(currentLang, 'sysPickConfirm');
+  sysPickCancelBtn.textContent = tSync(currentLang, 'sysPickCancel');
+}
+
+function showSysPickModal() {
+  fillSysPickModalText();
+  sysPickModal.hidden = false;
+  sysPickConfirmBtn.focus();
+}
+
+function hideSysPickModal() {
+  sysPickModal.hidden = true;
+}
+
+// 用户点「打开选择器」：收掉模态、续跑启动流程。继续的动作由调用方注册
+// （扩展=重新触发 doStart 走 preAcquireAudio；Web=从本手势内预取屏幕共享流），
+// 本模块不知道宿主差异。
+let sysPickContinuation: (() => void) | null = null;
+sysPickConfirmBtn.onclick = () => {
+  hideSysPickModal();
+  const go = sysPickContinuation;
+  sysPickContinuation = null;
+  go?.();
+};
+sysPickCancelBtn.onclick = () => {
+  hideSysPickModal();
+  sysPickContinuation = null;
+  setStatus('Stopped');
+};
+// 点遮罩空白处 = 取消（与「不支持」模态同一交互习惯）
+sysPickModal.onclick = (e) => {
+  if (e.target === sysPickModal) { hideSysPickModal(); sysPickContinuation = null; setStatus('Stopped'); }
+};
+
 // 点遮罩空白处关闭（卡片内部点击不冒泡到此：见下方 stopPropagation 处理）
 unsupModal.onclick = (e) => {
   if (e.target === unsupModal) hideUnsupportedModal();
@@ -883,6 +935,12 @@ unsupModal.onclick = (e) => {
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !unsupModal.hidden) hideUnsupportedModal();
+  // Esc 关确认框 = 取消本次启动（与点「取消」按钮同语义）
+  if (e.key === 'Escape' && !sysPickModal.hidden) {
+    hideSysPickModal();
+    sysPickContinuation = null;
+    setStatus('Stopped');
+  }
 });
 
 function updateLockUI() {
@@ -908,6 +966,10 @@ selSource.onchange = () => {
 //   ① 「开始」按钮；
 //   ② 模型刚装好后的续跑（扩展自动续跑；Web 版由引导卡上的主按钮调用，那次点击
 //      才是浏览器认可的新鲜手势，见 manualRestartAfterModel 的注释）。
+// prepareStartResumed：本次 doStart 是否来自系统音频确认框的「打开选择器」点击。
+// 首次点「开始」时先弹确认框，点确认后从新手势重入 doStart 并跳过确认框，
+// 否则两点会互相递归（确认框 → doStart → 又弹确认框）。
+let prepareStartResumed = false;
 async function doStart(): Promise<void> {
   const pendingSource: 'tab' | 'system' | 'mic' =
     selSource.value === 'mic' ? 'mic'
@@ -981,6 +1043,24 @@ async function doStart(): Promise<void> {
     updateSourceHint();
     // 行内提示会随 popup 关闭一起消失，模态层才是用户真正看得见的那一次反馈
     showUnsupportedModal();
+    return;
+  }
+  // 系统音频·选择器前置确认框（两端都有）：浏览器限制 getDisplayMedia 必须
+  // 画面+音频一起授权，很多用户会因"要共享屏幕"担心隐私而放弃。弹选择器之前
+  // 把限制与"画面流立刻销毁"讲清楚。点「打开选择器」后从**那个 click 手势**里
+  // 重新走 doStart——扩展侧选择器由 offscreen 文档弹（不受手势约束，但保持同一
+  // 交互节奏）；Web 侧的 getDisplayMedia 必须在这个新鲜手势内完成（见 prepareStart）。
+  if (source === 'system' && !prepareStartResumed) {
+    // 本次 doStart 是「开始」按钮触发的（不是确认框续跑）：先收掉已预取的流与浮窗，
+    // 挂上续跑回调再弹确认框。用户点「打开选择器」→ triggerStart 从新手势重入，
+    // 走到这里的 prepareStartResumed 已为 true，直接放行去弹真正的屏幕选择器。
+    releasePreStream();
+    setStatus('Stopped');
+    sysPickContinuation = () => {
+      prepareStartResumed = true;
+      try { void doStart(); } finally { prepareStartResumed = false; }
+    };
+    showSysPickModal();
     return;
   }
   // 系统音频/麦克风模式不依赖活动标签页（captureTabId 恒 null，字幕走悬浮窗），跳过 noActiveTab 检查

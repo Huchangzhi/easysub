@@ -470,5 +470,22 @@
     </div>
   </div>
 
+  <!-- 系统音频·选择器前置确认框（两端共用）：浏览器限制 getDisplayMedia 不能只授权音频，
+       必须画面+音频一起勾。在弹选择器之前把这件事讲清楚（尤其"画面流授权后立刻销毁"），
+       免得用户因为"要共享屏幕"而担心隐私直接放弃。点「打开选择器」才继续启动流程。 -->
+  <div class="unsup-mask" id="sysPickModal" hidden>
+    <div class="unsup-card pick-confirm" role="alertdialog" aria-modal="true" aria-labelledby="sysPickTitle">
+      <div class="unsup-head">
+        <svg class="unsup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <span id="sysPickTitle"></span>
+      </div>
+      <p class="unsup-body" id="sysPickBody"></p>
+      <div class="unsup-actions">
+        <button type="button" class="unsup-btn primary" id="sysPickConfirm"></button>
+        <button type="button" class="unsup-btn" id="sysPickCancel"></button>
+      </div>
+    </div>
+  </div>
+
   <div class="disclaimer" id="disclaimer">字幕由模型识别，不保证准确</div>
 </div>

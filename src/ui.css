@@ -676,6 +676,9 @@ body[data-mode="light"] .unsup-card { box-shadow: 0 14px 36px rgba(0, 0, 0, 0.2)
 /* 警示图标用琥珀色而非 accent：accent 随主题变色（可能是青/紫），承载不了「警告」语义 */
 .unsup-icon { width: 17px; height: 17px; flex: none; color: #f0a020; }
 .unsup-body { font-size: 11.5px; color: var(--text2); line-height: 1.6; margin: 0; }
+/* 选择器前置确认框正文比"不支持"提示长（要讲清限制+隐私+勾选三件事）：放宽卡片宽度，
+   保证英文文案下也不至于竖排成一条窄柱 */
+.unsup-card.pick-confirm { max-width: 380px; }
 .unsup-actions { display: flex; gap: 6px; margin-top: 2px; }
 .unsup-btn {
   flex: 1 1 0; min-width: 0;

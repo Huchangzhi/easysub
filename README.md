@@ -125,6 +125,23 @@ add_header Cross-Origin-Embedder-Policy require-corp;
 
 页面加载时会自检这两个条件，不合格就在说明区直接显示原因与处理办法（不会静默失败）。
 
+**GitHub Pages 具体说明**：Pages **没有**任何自定义响应头机制（没有 Netlify 的
+`_headers` 文件，也没有 Cloudflare Pages 的头配置），所以这两个头在 Pages 上
+**只能靠 `coi-serviceworker.js` 在客户端补**：
+
+- 首次访问流程：页面注册 Service Worker → 自动刷新一次 → 刷新后的导航响应被 SW
+  拦截并补上 COOP/COEP → 页面进入 `crossOriginIsolated`。那次刷新是必然的一次性
+  代价（刷新次数有 `sessionStorage` 计数上限 3 次，不会无限刷）。
+- **跨源请求会被 SW 原样放行**（否则破坏 CORS 语义）。识别模型从 ModelScope 下载，
+  其响应带 `Access-Control-Allow-Origin: *`，在 `require-corp` 下能通；若换成不带
+  CORS 头的镜像源，"一键下载模型"在 Pages 上会失败。
+- Range 请求（大文件分片）同样原样放行，不补头也不改写（包一层 Response 会丢掉
+  206 语义）。
+- Pages 强制 HTTPS，满足安全上下文要求；`coi-serviceworker.js` 必须与 `index.html`
+  同目录、同源部署。
+- 本地开发用 `npm run serve:web`（自带 COOP/COEP 响应头），可以省掉垫片的那次
+  自动刷新；生产环境不依赖本地服务。
+
 #### 获取与使用
 
 - **CI 产物**：GitHub Actions 的每次构建都会把 `dist-web/` 单独打成 `easysub-web*.zip`

@@ -198,6 +198,11 @@ const strings: Record<string, Record<string, string>> = {
     unsupGotIt: '我知道了',
     pickerCancelled: '已取消屏幕选择，识别未开始',
     pickingScreen: '请在弹出的窗口中选择要共享的屏幕',
+    // —— 系统音频·选择器前置确认框（点「确定」后才弹屏幕选择器）——
+    sysPickTitle: '即将打开屏幕共享选择器',
+    sysPickBody: '浏览器不允许单独采集声音：必须在选择器里同时共享画面才能拿到系统音频（这是 getDisplayMedia 的硬性限制）。请放心，只取音频轨——画面流会在授权后立刻销毁，不会被录制、保存或展示。选择时请勾选「同时分享标签页音频 / 分享系统音频」，否则拿不到声音。',
+    sysPickConfirm: '打开选择器',
+    sysPickCancel: '取消',
     sourceEnded: '音频来源已结束（停止共享 / 标签页被关闭），识别已停止',
     webPanelLost: '与识别面板的连接已断开（面板页被关闭或崩溃），识别已停止',
     sourceOutsideTip: '想在浏览器之外的软件上用字幕？试试改一下音频来源',
@@ -398,6 +403,11 @@ const strings: Record<string, Record<string, string>> = {
     unsupGotIt: 'Got it',
     pickerCancelled: 'Screen picking cancelled — recognition not started',
     pickingScreen: 'Pick the screen to share in the popup',
+    // —— System audio · pre-picker confirmation (picker opens only after Confirm) ——
+    sysPickTitle: 'The screen-sharing picker is about to open',
+    sysPickBody: 'The browser cannot capture audio alone: a screen-sharing picker must grant both video and audio (a hard getDisplayMedia restriction). Rest assured — only the audio track is used; the video track is destroyed immediately after authorization and is never recorded, saved, or shown. When picking, tick "Also share tab audio / Share system audio", otherwise no sound can be captured.',
+    sysPickConfirm: 'Open picker',
+    sysPickCancel: 'Cancel',
     sourceEnded: 'Audio source ended (sharing stopped / tab closed) — recognition stopped',
     webPanelLost: 'Lost the connection to the recognition panel (the panel page was closed or crashed) — recognition stopped',
     sourceOutsideTip: 'Want subtitles in apps outside the browser? Try switching the audio source.',
