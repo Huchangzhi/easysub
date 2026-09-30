@@ -13,7 +13,11 @@ export const TRANSCRIPT_KEY = 'tmspeech_transcript';
 // 超配额时 set 会整体失败、转写从此停止记录，比"少留几条历史"严重得多。
 export const TRANSCRIPT_MAX = IS_EXTENSION ? 1000 : 500;
 
-export interface TranscriptEntry { text: string; ts: number; tr?: string }
+// 契约：seq = 本会话内的句序号（从 1 起），随 SENTENCE_DONE 一起入库。
+// 为什么必须存下来：译文是按 seq 归位的，而"从尾部数第 seq 条"这个换算只在
+// "本会话的句子一条不少地追加在尾部"时成立——裁剪掉最老条目、或某条追加失败时，
+// 尾部对齐会整体错位，译文就挂到了别的句子上。存下 seq 才能精确匹配。
+export interface TranscriptEntry { text: string; ts: number; tr?: string; seq?: number }
 
 // 坑：storage 的 get→push→set 是三步非原子操作，两条 SENTENCE_DONE 交错执行时
 // 后写会整体覆盖前写、丢掉一句转写。改为 promise 链串行化：同一时刻只允许一个读改写
@@ -31,6 +35,7 @@ export function normalizeTranscriptEntry(entry: unknown): TranscriptEntry {
     text: typeof e.text === 'string' ? e.text : '',
     ts: typeof e.ts === 'number' ? e.ts : 0,
     tr: typeof e.tr === 'string' && e.tr ? e.tr : undefined,
+    seq: typeof e.seq === 'number' && e.seq > 0 ? e.seq : undefined,
   };
 }
 
@@ -41,13 +46,16 @@ export async function readTranscript(): Promise<TranscriptEntry[]> {
 
 // 坑：数组原本只增不减，每句都把整个数组重新序列化写入（累计 O(n²)），且 storage.local
 // 配额 10MB，长会话触顶后 set 永久静默失败、转写从此停止记录。写入前裁剪到上限。
-export function appendTranscript(text: string, ts: number = Date.now(), onError?: (e: unknown) => void) {
+// seq 一并入库：译文按它精确归位（见 attachTranscriptTranslation）。
+export function appendTranscript(
+  text: string, ts: number = Date.now(), seq?: number, onError?: (e: unknown) => void,
+) {
   queue = queue.then(async () => {
     try {
       const arr = await readTranscript();
       // 坑：必须用入参 ts——队列内再取 Date.now() 会在积压时漂移，入库时刻与
       // 转发给面板的盖章时刻分叉，重开面板后时标对不上实时所见
-      arr.push({ text, ts });
+      arr.push({ text, ts, seq: typeof seq === 'number' && seq > 0 ? seq : undefined });
       if (arr.length > TRANSCRIPT_MAX) arr.splice(0, arr.length - TRANSCRIPT_MAX);
       await storage.set({ [TRANSCRIPT_KEY]: arr });
     } catch (e) {
@@ -60,8 +68,8 @@ export function appendTranscript(text: string, ts: number = Date.now(), onError?
 // 换句后的定稿译文挂到历史原句上。旧实现无条件挂"末条"：一旦识别端积压
 // （慢速机器/长句推理），TRANSLATION_FINAL 迟到时面板里可能已插入了更新的句子，
 // 译文就会被挂错句——这正是"记录里部分句子翻译丢失/错位"的成因。
-// 现在条目带 seq（随 SENTENCE_DONE 原样送达），译文按 seq 精确配对；
-// seq 缺失（旧消息/异常路径）才退回"末条无译文"的旧语义。
+// 现在条目带 seq，译文按 seq 精确配对；条目没有 seq（升级前写入的旧数据，
+// 或某次追加异常）才退回"从尾部数第 seq 条"的估算。
 // 走同一串行队列，避免与 appendTranscript 的读改写并发互相覆盖丢数据。
 export function attachTranscriptTranslation(text: string, seq?: number, onError?: (e: unknown) => void) {
   if (!text) return;
@@ -70,12 +78,19 @@ export function attachTranscriptTranslation(text: string, seq?: number, onError?
       const arr = await readTranscript();
       let target: TranscriptEntry | undefined;
       if (typeof seq === 'number' && seq > 0) {
-        // seq 从 1 起、条目按句追加：本会话第 seq 条即"从尾部数第 seq 条"
-        //（storage 跨会话累积，但条目只增不删（裁剪只去最老），尾部对齐恒成立）。
-        const backIdx = arr.length - seq;
-        if (backIdx >= 0 && backIdx < arr.length) target = arr[backIdx];
-        // 坑：目标条目已有译文时不许挪位到"末条"——末条可能是更新的句子，
-        // 挪位即错挂（重复交付已在识别端队列层拦截，这里是最后防线）。
+        // 精确匹配：从尾部找（新会话的 seq 会从 1 重新计数并与旧会话撞号，
+        // 本会话的条目总是追加在尾部，尾部优先找到的才是这一句）。
+        for (let i = arr.length - 1; i >= 0; i--) {
+          if (arr[i].seq === seq) { target = arr[i]; break; }
+        }
+        // 兼容无 seq 的旧条目：退回"从尾部数第 seq 条"的旧估算。
+        // 坑：只有"一条都没漏"时这个估算才成立——裁剪过最老条目、或某次追加失败，
+        // 尾部对齐就整体错位、译文挂到别的句子上（这正是要改成精确匹配的原因）。
+        if (!target) {
+          const backIdx = arr.length - seq;
+          if (backIdx >= 0 && backIdx < arr.length) target = arr[backIdx];
+        }
+        // 坑：命中条目已有译文时不做任何事——不许挪位到"末条"，末条可能是更新的句子。
       } else {
         target = arr[arr.length - 1]; // 无 seq 的旧消息：退回"末条"旧语义
       }

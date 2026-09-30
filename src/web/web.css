@@ -83,8 +83,10 @@ body[data-app="web"] .container {
   /* 宽屏下历史列表给足高度，窄屏沿用 ui.css 的 140px 紧凑值 */
   body[data-app="web"] #transcriptBox { max-height: 340px; }
   body[data-app="web"] .preview { max-height: 240px; min-height: 120px; }
-  /* 状态栏与免责声明贴在最后通栏 */
-  body[data-app="web"] .status-bar { grid-area: auto; }
+  /* 状态栏与免责声明贴最后通栏：不给它们显式位置的话，两个未定位元素会被自动
+     放进第一列，状态日志被挤成一条窄缝（宽屏下尤其明显） */
+  body[data-app="web"] .status-bar,
+  body[data-app="web"] .disclaimer { grid-column: 1 / -1; }
 }
 
 /* 中等宽度：两列（去掉最右列，外观卡回落到左列下方） */
@@ -112,6 +114,9 @@ body[data-app="web"] .container {
   #textPreview { grid-area: preview; }
   .web-note { grid-area: note; }
   body[data-app="web"] #transcriptBox { max-height: 260px; }
+  /* 同宽屏块：状态栏与免责声明通栏，别被自动放进第一列 */
+  body[data-app="web"] .status-bar,
+  body[data-app="web"] .disclaimer { grid-column: 1 / -1; }
 }
 
 /* 窄屏（手机/窄窗）：回到单列，与扩展弹窗同一种纵向节奏 */
@@ -121,9 +126,12 @@ body[data-app="web"] .container {
 }
 
 /* 子面板（热词/模型引导）在整页里不该像弹窗那样 inset:0 铺满——限制成居中小卡片，
-   否则宽屏下会出现一张覆盖整个页面的巨卡。 */
+   否则宽屏下会出现一张覆盖整个页面的巨卡。
+   坑：必须排除 .guide-modal。模型引导卡在 Web 版是"带遮罩的模态大卡"（见 ui.css），
+   而本块的特异性(0,2,1) 高于 .subpanel.guide-modal(0,2,0)，不排除就会把它的宽度
+   压回 460px、高度压回 640px，模态版白做。 */
 @media (min-width: 640px) {
-  body[data-app="web"] .subpanel {
+  body[data-app="web"] .subpanel:not(.guide-modal) {
     position: fixed;
     inset: auto;
     top: 50%; left: 50%;

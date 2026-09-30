@@ -10,10 +10,11 @@
 // 只有真的需要 chrome.* 才按 IS_EXTENSION 分支，并且分支必须在 platform.ts 有对应封装。
 import { getLang, setLang, tSync } from './i18n';
 import {
-  storage, sendToHost, onMessageFromHost, resolveUrl, getActiveTabId,
-  hasBundledResource, IS_EXTENSION, HAS_TAB_SOURCE, DEFAULT_AUDIO_SOURCE,
+  storage, sendToHost, onMessageFromHost, getActiveTabId,
+  hasBundledResource, probeBundledResource, IS_EXTENSION, HAS_TAB_SOURCE, DEFAULT_AUDIO_SOURCE,
 } from './platform';
 import { listModelKeys, saveModelFilesAtomic, saveModelBlob, getModelFile } from './model-db';
+import { TRANSCRIPT_MAX, clearTranscript } from './transcript-store';
 
 const $ = (id: string) => document.getElementById(id)!;
 // 可选元素（Web 版外壳独有）：扩展 popup 模板里没有这些 id，取值一律走这里，
@@ -30,6 +31,10 @@ export interface PanelHostHooks {
   // 「开始」按钮的第一件事（任何 await 之前）。返回对象会合并进 START_RECOGNITION 消息。
   // 抛错视为"用户取消了本次启动"，不再继续。
   prepareStart?(source: 'tab' | 'system' | 'mic'): Promise<Record<string, any> | void>;
+  // 本次启动半路夭折（用户取消屏幕选择、环境不合格、模型没装、没有可用音源……）。
+  // 宿主用它回收 prepareStart 里已经做掉的副作用——否则"预开的字幕浮窗"会孤零零留在
+  // 屏幕上（用户以为已经开始识别了，实际什么都没跑）。扩展侧不注册（它没有预开窗口）。
+  startAborted?(): void;
   // 音源下拉的宿主定制（Web 版要把"当前标签页"选项摘掉）
   customizeSources?(sel: HTMLSelectElement): void;
   // 模板文案的宿主定制：Web 版没有"浏览器之外的软件"这种话术，也没有标签页概念，
@@ -42,24 +47,31 @@ export interface PanelHostHooks {
   // 纯 Web 版用它在此时才注入 wasm 脚本（此前模型缺失，注入会留下半初始化的运行时），
   // 这样用户点「开始」时 wasm 往往已就绪，出字更快。扩展包内自带模型，无需此回调。
   onModelReady?(): void;
+  // 刚导入的识别模型**本页换不掉**（纯 Web 版专用）：识别模型是在 wasm 运行时初始化
+  // 那一刻读进文件系统的，之后整页范围内无法替换——扩展侧靠"停止即销毁 offscreen 文档"
+  // 天然规避，Web 页面常驻。宿主据此返回 true，面板就不再让用户满怀期待地点「开始识别」
+  // （那会静默用旧模型跑），改为明确提示刷新页面。
+  modelNeedsReload?(): boolean;
+  // 模型引导面板的呈现方式。扩展弹窗只有 380px 宽，内置 subpanel 浮层已占满整窗，
+  // 足够醒目；纯 Web 版是整页，同一个小卡片缩在角落用户根本注意不到（实测反馈），
+  // 所以 Web 侧返回 'modal' 把它变成带遮罩的居中大卡。
+  modelGuideStyle?: 'panel' | 'modal';
+  // 模型装好后是否要求用户**手动**再点一次才开始识别（纯 Web 版为 true）。
+  // 根因是浏览器的瞬时用户激活：Web 版首次安装模型要下载 412MB（分钟级），
+  // 等它结束时当初那次点击的手势早已过期，此时再调 getDisplayMedia 必被拒绝——
+  // 于是用户看到的现象就是"模型下载好了却卡在那里、必须重开一次"。
+  // 正确做法不是假装自动续跑，而是把"再点一次"变成卡片上一个显眼的主按钮：
+  // 用户点它的那一刻才是新鲜手势，采集与开窗都能正常完成。
+  // 扩展侧不传（下载/导入成功即自动续跑，与改造前一致）。
+  manualRestartAfterModel?: boolean;
 }
 let hooks: PanelHostHooks | null = null;
 // 经函数取值：直接读模块级变量会被 TS 的流程分析在"首次赋值前"窄化成 null，
 // 属性访问报 never（本模块的接线代码散落在顶层，读点早于任何赋值）。
 function hostHooks(): PanelHostHooks | null { return hooks; }
 
-// 「现在能不能安全预热 wasm」的判定交给宿主：扩展包内恒有 .data（或用户已导入），
-// 恒 true；纯 Web 版必须等用户导入/下载过模型，否则加载器会去拉一个 404 的 .data，
-// 并把 pthread worker 池初始化失败（shared 内存 transfer 抛 DataCloneError），
-// 之后即使补上模型也难以恢复。默认恒 true，保持扩展行为不变。
-let preloadAllowed: (() => Promise<boolean>) | null = null;
-export function setPreloadGate(fn: () => Promise<boolean>) { preloadAllowed = fn; }
-export async function canPreloadWasm(): Promise<boolean> {
-  return preloadAllowed ? await preloadAllowed() : true;
-}
-// 「是否要求跨源隔离」：纯 Web 版 true（宿主在 mountPanel 时打开），扩展 false。
-// 判定与 preloadGate 分开，因为两者约束的时间点不同：门卫在点「开始」时校验，
-// preload 门在页面加载时决定要不要注入 wasm（没模型时不能注入）。
+// 「是否要求跨源隔离」：纯 Web 版 true（宿主入口调用一次），扩展 false。
+// 面板在点「开始」时据此拦下必然失败的启动，并说明补隔离的两条路。
 let needIsolation = false;
 export function requireCrossOriginIsolation(on: boolean) { needIsolation = on; }
 function preloadNeedIsolation() { return needIsolation; }
@@ -172,6 +184,8 @@ let transcriptEntries: TranscriptEntry[] = [];
 // 本 popup 生命周期内见过的最大句序号：SENTENCE_DONE 的 seq 回绕（小于等于它）
 // 即"用户重启了会话"，旧条目的 seq 全部作废（见 SENTENCE_DONE 分支注释）
 let maxSeqSeen = 0;
+// 引导卡停在"需要刷新页面"的就绪态（刚导入的识别模型本页换不掉）
+let asrReloadPending = false;
 const PREFS_KEY = 'tmspeech_prefs';
 const TRANSCRIPT_KEY = 'tmspeech_transcript';
 
@@ -277,7 +291,15 @@ async function applyLang() {
   $('hotwordsSaveLabel').textContent = tr('hotwordsSave');
   $('btnHotwordsClose').setAttribute('aria-label', tr('close'));
   // —— ASR 模型缺失引导（窗中窗）——
-  $('asrModelTitle').textContent = tr('asrModelTitle');
+  // 坑：卡片处于"模型已就绪"态时标题已被换成 asrModelReadyTitle，这里不能无条件写回
+  // 缺失态标题（否则在就绪页面上切语言，标题会变回"缺少语音识别模型"）。
+  const asrReadyRow = $opt('asrReadyRow');
+  const asrReadyVisible = !!asrReadyRow && !asrReadyRow.hidden;
+  $('asrModelTitle').textContent = asrReadyVisible
+    ? tr(asrReloadPending ? 'asrModelReloadTitle' : 'asrModelReadyTitle')
+    : tr('asrModelTitle');
+  // 就绪态下缺模型态的 hint 是自相矛盾的文案（标题已说"模型已就绪"），一并切换可见性
+  $('asrModelHint').hidden = asrReadyVisible;
   $('asrModelHint').textContent = tr('asrModelHint');
   $('asrModelLinkGithub').textContent = tr('asrModelGithub');
   $('asrModelLinkGitee').textContent = tr('asrModelGitee');
@@ -290,6 +312,13 @@ async function applyLang() {
   }
   $('asrAltToggle').textContent =
     ($('asrAltLinks').classList.contains('open') ? '▲ ' : '▼ ') + tr('asrModelAltToggle');
+  // 「模型已就绪 → 再点一次开始」区（仅 Web）：文案随语言切换
+  const readyRow = $opt('asrReadyRow');
+  if (readyRow && !readyRow.hidden) {
+    const readyKey = selSource.value === 'mic' ? 'asrModelReadyHintMic' : 'asrModelReadyHint';
+    $opt('asrReadyHint')!.textContent = tr(asrReloadPending ? 'asrModelReloadHint' : readyKey);
+    $opt('asrModelStartNowLabel')!.textContent = tr(asrReloadPending ? 'asrModelReloadBtn' : 'asrModelStartNow');
+  }
   $('reselectModelLabel').textContent = tr('reselectModel');
   $('exportLabel').textContent = tr('exportLabel');
   $('helpTipExport').textContent = tr('exportHelp');
@@ -875,7 +904,11 @@ selSource.onchange = () => {
   updateSourceHint();
 };
 
-btnStart.onclick = async () => {
+// 启动流程本体。抽成函数是为了两处复用：
+//   ① 「开始」按钮；
+//   ② 模型刚装好后的续跑（扩展自动续跑；Web 版由引导卡上的主按钮调用，那次点击
+//      才是浏览器认可的新鲜手势，见 manualRestartAfterModel 的注释）。
+async function doStart(): Promise<void> {
   const pendingSource: 'tab' | 'system' | 'mic' =
     selSource.value === 'mic' ? 'mic'
       : selSource.value === 'system' ? 'system'
@@ -891,14 +924,19 @@ btnStart.onclick = async () => {
     const cancelled = e?.name === 'NotAllowedError' || e?.name === 'AbortError';
     if (!cancelled) log(`${tSync(currentLang, 'errorPrefix')}`.replace('{m}', String(e?.message || e)));
     setStatus('Stopped');
+    // 宿主在 prepareStart 里可能已经预开了字幕浮窗：本次启动已夭折，必须让它收回去，
+    // 否则屏幕上留着一个空浮窗（用户以为已经在识别了，其实什么都没跑）。
+    hostHooks()?.startAborted?.();
     return;
   }
   // 坑：宿主预取的屏幕共享流（hostExtras.preStream）一旦到手就必须有人负责回收。
   // 下面每一条早退路径都得先把它停掉，否则"用户共享了屏幕 → 又取消了模型引导"
   // 会在屏幕上留下一个永不关闭的共享（录制指示灯常亮，用户只能手动点停止共享）。
+  // 同一处收口也回收宿主预开/预置的其它副作用（Web 的字幕浮窗），早退路径一律调用它。
   const releasePreStream = () => {
     const s = (hostExtras as any)?.preStream as MediaStream | undefined;
     if (s) s.getTracks().forEach((t) => t.stop());
+    hostHooks()?.startAborted?.();
   };
   // 跨源隔离门卫（纯 Web 版）：sherpa 的 wasm 是 pthreads 构建，需要 SharedArrayBuffer，
   // 而 SAB 只在 crossOriginIsolated 下可用。没隔离就点开始，只会得到一句
@@ -910,16 +948,24 @@ btnStart.onclick = async () => {
     log(tSync(currentLang, 'webNoIsolation'));
     return;
   }
+  // 宿主明说"显示端开不出来"（纯 Web 版被浏览器的弹窗拦截挡住）：这时起来也是无声会话，
+  // 宿主已在说明区写清原因，本次启动就此收尾。要排在模型引导之前——否则用户先被引导去
+  // 下载 412MB 模型，下完才发现显示端依然开不出来。
+  if ((hostExtras as any)?.displayUnavailable) {
+    releasePreStream();
+    setStatus('Stopped');
+    return;
+  }
   // nomodel 版门卫：包内无 .data 且未导入过 → 弹窗中窗引导，导入成功自动继续本次启动
   if (!(await ensureAsrModel())) { releasePreStream(); return; }
   // 坑：宿主明确告知"这次手势已被模型流程吃掉"（纯 Web 版首次安装模型时必然如此：
   // 下载 412MB 耗时以分钟计，用户激活早已过期，此时再去 getDisplayMedia 必被拒绝）。
-  // 不装模作样地继续启动，直接请用户再点一次「开始」——那一次是新鲜的激活，
-  // 采集能正常弹选择器。
+  // 不装模作样地继续启动，而是走"装好后请用户再点一次"的显式流程：
+  // Web 侧会在引导卡上亮出「开始识别」主按钮（那一次点击才是新鲜激活）。
   if ((hostExtras as any)?.modelPending) {
     releasePreStream();
     setStatus('Stopped');
-    log(tSync(currentLang, 'webModelPendingRetry'));
+    // 模型引导卡已经在屏幕上，用户看得到下一步做什么，这里不必再写一行会被冲掉的日志
     return;
   }
   const source: 'tab' | 'system' | 'mic' =
@@ -964,7 +1010,10 @@ btnStart.onclick = async () => {
     ...(hostExtras || {}),
   }).catch(() => {});
   setStatus('Running');
-};
+}
+
+export function triggerStart(): void { void doStart(); }
+btnStart.onclick = () => { void doStart(); };
 
 btnStop.onclick = () => {
   sendToHost({ type: 'STOP_RECOGNITION' }).catch(() => {});
@@ -987,6 +1036,8 @@ const asrProgressText = $('asrProgressText');
 const asrAltToggle = $('asrAltToggle') as HTMLButtonElement;
 const asrAltLinks = $('asrAltLinks') as HTMLDivElement;
 let asrPanelResolve: ((ok: boolean) => void) | null = null;
+// 与 asrPanelResolve 配套：并发的 ensureAsrModel 复用同一个等待中的 Promise（见那里注释）
+let asrPanelPending: Promise<boolean> | null = null;
 let asrDlAbort: AbortController | null = null;
 
 function refreshAsrPanelLang() {
@@ -1002,13 +1053,70 @@ function refreshAsrPanelLang() {
   if (!btnAsrModelDownload.disabled) {
     $('asrModelDownloadLabel').textContent = tSync(currentLang, 'asrModelDownloadBtn');
   }
+  const readyRow = $opt('asrReadyRow');
+  if (readyRow) {
+    $opt('asrReadyHint')!.textContent = tSync(currentLang, 'asrModelReadyHint');
+    $opt('asrModelStartNowLabel')!.textContent = tSync(currentLang, 'asrModelStartNow');
+  }
+}
+
+// 遮罩的显隐只跟着引导卡的可见性走。扩展侧没有 #asrBackdrop（模板里是 Web 也不载入？
+// 不——它在共享 ui-body 里，扩展也有该节点），所以这里按 modelGuideStyle 判定，
+// 扩展恒为 panel 风格，遮罩永不显示。
+function setAsrBackdrop(visible: boolean) {
+  const bd = $opt('asrBackdrop');
+  if (!bd) return;
+  bd.hidden = !(visible && hostHooks()?.modelGuideStyle === 'modal');
+}
+
+// 模型就绪态的卡片内容：隐藏下载/导入区，露出"再点一次开始"的主按钮。
+// 只有声明了 manualRestartAfterModel 的宿主（Web）需要这一步；扩展走 settleAsrPanel(true)
+// 直接关面板并自动续跑，看不到这个状态。
+// reload=true 是另一种结局：刚导入的模型本页换不掉（wasm 运行时已把旧的读进文件系统），
+// 此时**不能**给「开始识别」按钮——点了只会静默用旧模型跑，比不给按钮更糟。
+function showAsrReadyState(reload = false) {
+  const readyRow = $opt('asrReadyRow');
+  if (!readyRow) return;
+  asrReloadPending = reload;
+  // 就绪提示要跟音源走：系统音频那句说的是"在屏幕选择器里勾选分享音频"，麦克风用户
+  // 看到的就是完全无关的指引。按用户当时选的音源给对应的下一步。
+  const readyKey = selSource.value === 'mic' ? 'asrModelReadyHintMic' : 'asrModelReadyHint';
+  $opt('asrReadyHint')!.textContent = tSync(currentLang, reload ? 'asrModelReloadHint' : readyKey);
+  $opt('asrModelStartNowLabel')!.textContent = tSync(currentLang, reload ? 'asrModelReloadBtn' : 'asrModelStartNow');
+  $('asrModelTitle').textContent = tSync(currentLang, reload ? 'asrModelReloadTitle' : 'asrModelReadyTitle');
+  // 坑：缺模型态的 hint（"当前安装包未内置模型，点击下方按钮下载…"）在就绪态下
+  // 与标题自相矛盾——用户会以为下载没成功。就绪态只保留 readyRow 里的说明。
+  $('asrModelHint').hidden = true;
+  btnAsrModelDownload.hidden = true;
+  asrProgressWrap.hidden = true;
+  ($('asrDlWarn') as HTMLElement).hidden = true;
+  asrAltToggle.hidden = true;
+  asrAltLinks.classList.remove('open');
+  asrAltLinks.hidden = true;
+  asrModelStatus.textContent = '';
+  readyRow.hidden = false;
 }
 
 function openAsrModelPanel() {
   refreshAsrPanelLang();
   asrModelStatus.textContent = '';
   resetAsrDownloadUi();
+  // 复位"就绪态"的隐藏项：重新选择模型时下载/导入区必须回来（上次走到 ready 态时被藏了）
+  asrReloadPending = false;
+  const readyRow = $opt('asrReadyRow');
+  if (readyRow) readyRow.hidden = true;
+  const startNow = $opt('btnAsrModelStartNow') as HTMLElement | null;
+  if (startNow) startNow.hidden = false;
+  $('asrModelHint').hidden = false;
+  btnAsrModelDownload.hidden = false;
+  asrAltToggle.hidden = false;
+  asrAltLinks.hidden = false;
+  // 呈现方式由宿主定：扩展=面板内浮层（窗口太小，浮层已足够），Web=带遮罩的模态大卡。
+  // 只切一个 class，DOM 与逻辑两端完全共用。
+  const modal = hostHooks()?.modelGuideStyle === 'modal';
+  asrModelPanel.classList.toggle('guide-modal', modal);
   asrModelPanel.hidden = false;
+  setAsrBackdrop(true);
 }
 
 function resetAsrDownloadUi() {
@@ -1023,8 +1131,11 @@ function resetAsrDownloadUi() {
 // 只探测不弹窗：宿主在"取音频前"要先知道模型在不在（见 web/panel.ts 的 prepareStart）。
 // 放在 ensureAsrModel 之前是为了让两条路径共用同一套判定，避免"探测说有一处、
 // 引导说没有"这种自相矛盾。
+// 判定与引擎的注入门卫同口径（`'absent'` 才算缺）。扩展侧该探测恒为 present/absent
+// （等价于 master 的 `res.ok`），不会因探测异常把包内自带模型的 full/lite 版判成缺模型；
+// Web 托管侧才可能出现 unknown，那按"有"处理（宁可让它去报真实错误，也比把能跑的包锁死强）。
 export async function isAsrModelReady(): Promise<boolean> {
-  if (await hasBundledResource(ASR_DATA_PATH)) return true;
+  if ((await probeBundledResource(ASR_DATA_PATH)) !== 'absent') return true;
   try {
     const blob = await getModelFile(ASR_DB_KEY);
     return !!(blob && blob.size > 0);
@@ -1033,15 +1144,50 @@ export async function isAsrModelReady(): Promise<boolean> {
 
 async function ensureAsrModel(): Promise<boolean> {
   if (await isAsrModelReady()) return true;
-  openAsrModelPanel();
-  return new Promise<boolean>(resolve => { asrPanelResolve = resolve; });
+  // 坑：并发的两次 doStart（用户连点「开始」）会先后走到这里，若各自 new 一个 Promise
+  // 覆盖 asrPanelResolve，先来的那个 await 永远不落定——它的 prepareStart 已经预取了
+  // 屏幕共享流，于是那次的流永远没人回收（共享指示灯常亮）。复用同一个 pending Promise。
+  // 卡片也只在首次打开：重复 openAsrModelPanel 会把下载 UI 复位（清进度、重新启用按钮），
+  // 用户在下载途中再点一次「开始」就会把正在跑的下载界面清掉。
+  if (!asrPanelPending) {
+    openAsrModelPanel();
+    asrPanelPending = new Promise<boolean>(resolve => { asrPanelResolve = resolve; });
+  }
+  return asrPanelPending;
 }
 
 function settleAsrPanel(ok: boolean) {
+  // 纯 Web 版的"就绪态"：模型已装好，但**不能自动续跑**——首次下载 412MB 耗以分钟计，
+  // 点「开始」时那次手势早已过期，此时再去 getDisplayMedia 必被浏览器拒绝，用户看到的
+  // 就是"下好了却卡住、必须重来一次"。改成把"再点一次"做成卡片上的主按钮：
+  // 用户点它的那一刻才是有效手势，采集与开窗都能正常完成。
+  if (ok && hostHooks()?.manualRestartAfterModel) {
+    btnReselectModel.hidden = false;
+    // 本次导入的模型本页换不掉（wasm 运行时已定型）→ 明说需要刷新，且不给开始按钮
+    showAsrReadyState(!!hostHooks()?.modelNeedsReload?.());
+    // 让被拦下的那次 doStart 就此收尾（它已把预取的流回收掉），不要再自动启动。
+    if (asrPanelResolve) { asrPanelResolve(false); asrPanelResolve = null; }
+    asrPanelPending = null;
+    return;
+  }
   asrModelPanel.hidden = true;
+  setAsrBackdrop(false);
   if (ok) btnReselectModel.hidden = false; // 导入成功 → 显示重新选择按钮
   if (asrPanelResolve) { asrPanelResolve(ok); asrPanelResolve = null; }
+  asrPanelPending = null;
 }
+
+// 就绪态里的主按钮：正常情况下是「开始识别」（那一次点击才是浏览器认可的新鲜手势）；
+// 需要刷新页面时（本页换不掉刚导入的识别模型）同一位置变成「刷新页面」——
+// 与其不给按钮、让用户自己找刷新，不如把这个动作直接放在他正在看的地方。
+$opt('btnAsrModelStartNow')?.addEventListener('click', () => {
+  if (asrReloadPending) { location.reload(); return; }
+  asrModelPanel.hidden = true;
+  setAsrBackdrop(false);
+  const readyRow = $opt('asrReadyRow');
+  if (readyRow) readyRow.hidden = true;
+  triggerStart();
+});
 $('btnAsrModelClose').onclick = () => { asrDlAbort?.abort(); settleAsrPanel(false); };
 
 // —— 一键下载：popup 直连 ModelScope 流式下载 → IndexedDB ——
@@ -1180,8 +1326,15 @@ async function loadTranscript() {
       text: String(o?.text ?? ''),
       ts: Number(o?.ts) || 0,
       tr: typeof o?.tr === 'string' && o.tr ? o.tr : undefined,
+      seq: Number(o?.seq) > 0 ? Number(o.seq) : undefined,
     };
   });
+  // 坑：从存储装载的都是**历史会话**的条目，它们带的 seq 对新会话毫无意义（seq 是会话内
+  // 从 1 起的句号，两场会话必然撞号）。装载时一律抹掉，让"按 seq 精确配对"只在本场条目里
+  // 生效——否则本场第一句的译文可能挂到上一场同号的句子上。
+  // maxSeqSeen 保持 0（不是回填历史最大值）：回填的话，本场前几句会满足 seq <= maxSeqSeen
+  // 而被误判成"会话重启回绕"，把本场条目的 seq 一起抹掉，反而造成译文错位。
+  transcriptEntries.forEach(e => { delete e.seq; });
   renderTranscript();
 }
 
@@ -1242,9 +1395,12 @@ function renderEntryHtml(entry: TranscriptEntry, q?: string): string {
 // 坑：高亮必须"按原文切分、逐段转义后再拼 <mark>"——若先整体 escapeHtml 再替换
 // 原始查询词，查询含 &/</> 时会与已转义实体错位，产生错误高亮甚至注入点
 function highlightEntry(text: string, q: string): string {
+  const lower = text.toLowerCase();
+  // 坑：某些字符（İ 等）转小写后长度会变，lower 的下标与原文不再一一对应，
+  // 按它切分会切错位置甚至拆开代理对。长度不一致就放弃高亮，只做转义（显示正确优先）。
+  if (lower.length !== text.length) return escapeHtml(text);
   let out = '';
   let last = 0;
-  const lower = text.toLowerCase();
   while (true) {
     const i = lower.indexOf(q, last);
     if (i < 0) break;
@@ -1278,16 +1434,23 @@ btnCopy.onclick = async () => {
   const lines = transcriptEntries.map(t => chkTranscriptTr.checked && t.tr ? `${t.text}\n${t.tr}` : t.text);
   const text = lines.join('\n');
   if (!text) return;
-  await navigator.clipboard.writeText(text);
   const label = $('copyLabel');
   const orig = label.textContent!;
-  label.textContent = tSync(currentLang, 'copied');
+  try {
+    await navigator.clipboard.writeText(text);
+    label.textContent = tSync(currentLang, 'copied');
+  } catch {
+    // 剪贴板不可用（非安全上下文/权限被拒）：按钮文字不动即"没复制成"，不弹错
+  }
   setTimeout(() => { label.textContent = orig; }, 1200);
 };
 
 btnClear.onclick = () => {
   transcriptEntries = [];
-  storage.remove(TRANSCRIPT_KEY);
+  // 走 transcript-store 的串行队列：直接 storage.remove 会与 bg/宿主正在排队的
+  // appendTranscript（get→push→set）交错——remove 落在读之后写之前，那一句就被写回来了，
+  // 表现为"清空后凭空冒出一句"。入队消除这个竞态。
+  clearTranscript();
   // 清空记录时一并复位搜索框——否则残留的搜索词让空态显示成"没有匹配的字幕"，误导用户
   searchInput.value = '';
   searchCount.textContent = '';
@@ -1392,6 +1555,7 @@ document.querySelectorAll<HTMLButtonElement>('#translateDirRow .seg').forEach(b 
     const d = b.dataset.dir!;
     applyTranslateDir(d);
     savePrefs({ translationDirection: d });
+    pushTranslateLive();
   };
 });
 
@@ -1409,8 +1573,22 @@ document.querySelectorAll<HTMLButtonElement>('#translateTimingRow .seg').forEach
     const t = b.dataset.timing!;
     applyTranslateTiming(t);
     savePrefs({ translationTiming: t });
+    pushTranslateLive();
   };
 });
+
+// 运行中改实时翻译设置：只有会话在跑时才需要通知宿主（空闲时改的就是"下次生效"，
+// 由 START 时的配置回源读取）。不通知的话运行中改开关/方向/时机是完全静默无效的
+// ——用户会以为功能坏了（实测反馈过"网页版翻译用不了"）。
+function pushTranslateLive() {
+  if (lastStatus !== 'Running') return;
+  sendToHost({
+    type: 'TRANSLATION_SETTINGS_LIVE',
+    enabled: chkTranslate.checked,
+    direction: activeTranslateDir(),
+    timing: activeTranslateTiming(),
+  }).catch(() => {});
+}
 
 function buildTranslateNotice() {
   translateNotice.textContent = '';
@@ -1444,6 +1622,7 @@ function updateTranslateUi() {
 chkTranslate.onchange = () => {
   savePrefs({ translationEnabled: chkTranslate.checked });
   updateTranslateUi();
+  pushTranslateLive();
 };
 
 btnPickModel.onclick = () => modelFolderPicker.click();
@@ -1451,6 +1630,10 @@ btnPickModel.onclick = () => modelFolderPicker.click();
 // 测试翻译：按当前方向发一次真实翻译请求，走 bg → offscreen → worker 全链路
 function activeTranslateDir(): string {
   return document.querySelector<HTMLButtonElement>('#translateDirRow .seg.active')?.dataset.dir || 'auto';
+}
+function activeTranslateTiming(): 'stream' | 'final' {
+  return document.querySelector<HTMLButtonElement>('#translateTimingRow .seg.active')?.dataset.timing === 'final'
+    ? 'final' : 'stream';
 }
 
 let translateTesting = false;
@@ -1504,11 +1687,28 @@ modelFolderPicker.onchange = async () => {
       // 否则 worker 按 `opus-mt-en-zh/...` 匹配不到。
       const parts = f.webkitRelativePath.split('/');
       const modelIdx = parts.findIndex(p => p === 'opus-mt-en-zh' || p === 'opus-mt-zh-en');
-      const key = (modelIdx >= 0 ? parts.slice(modelIdx) : parts.slice(1)).join('/');
+      // 坑：用户可能选中上级目录、连带一堆无关文件（截图/视频）。全量 arrayBuffer()
+      // 进内存会在导入前就 OOM，且无关文件也会被写进模型库。只收模型目录下的文件。
+      if (modelIdx < 0) continue;
+      const key = parts.slice(modelIdx).join('/');
       entries.push({ key, data: await f.arrayBuffer() });
     }
+    if (entries.length === 0) {
+      log(tSync(currentLang, 'errorPrefix').replace('{m}', tSync(currentLang, 'modelFolderEmpty')));
+      modelFolderPicker.value = '';
+      return;
+    }
+    // deleteMatch 用 includes 而不是 `^opus-mt-...`：历史版本曾把
+    // `<选中文件夹>/opus-mt-en-zh/...` 整段存进库，锚定行首的正则清不掉这些旧键，
+    // worker 的后缀兜底（translation-worker.ts 的 resolveFile）可能仍读到旧文件。
+    // 新写入的键本来就以 opus-mt- 开头，宽松匹配不会误删其它模型数据。
     await saveModelFilesAtomic(entries, k => k.includes('opus-mt'));
     translateStatus.textContent = tSync(currentLang, 'modelLoaded').replace('{n}', String(entries.length));
+    // 坑：worker 与引擎都把"缺模型"记忆化了（worker 缓存 + translateWarned 告警门），
+    // 不通知的话，会话中途导入的模型要到下次启动才生效——用户会以为导入失败。
+    // 通知宿主解除记忆：运行中的会话下一句就开始出译文，无需重启。
+    sendToHost({ type: 'TRANSLATION_MODEL_IMPORTED' }).catch(() => {});
+    log(tSync(currentLang, 'translateModelLive'));
   } catch (e: any) {
     log(tSync(currentLang, 'errorPrefix').replace('{m}', String(e?.message || e)));
   }
@@ -1537,11 +1737,23 @@ onMessageFromHost((msg) => {
       // 旧消息无 seq 时为 0，配对退回"末条"旧语义
       const seq = Number(msg.seq) || 0;
       // 坑：popup 开着时用户可能重启识别会话，seq 从 1 重新计数，与上一场条目撞号
-      // → 译文按 seq 配对会挂到上一场的句子上。检测到回绕就抹掉旧条目的 seq
-      //（旧场定稿此刻必已交付完：会话重启会清空翻译队列与积压，无迟到回包）。
-      if (seq > 0 && seq <= maxSeqSeen) transcriptEntries.forEach(e => { delete e.seq; });
-      if (seq > maxSeqSeen) maxSeqSeen = seq;
+      // → 译文按 seq 配对会挂到上一场的句子上。检测到回绕（seq 没有继续递增）就把已有
+      // 条目的 seq 全抹掉，**并把基线重置到本句**——不重置的话，本场后续每一句都仍满足
+      // seq <= 旧基线，会反复全表 strip，本场条目永远留不住 seq、迟到译文只能退回
+      // "末条"兜底而错位。存储装载时已抹掉历史 seq（见 loadTranscript），基线只反映本场。
+      if (seq > 0 && seq <= maxSeqSeen) {
+        transcriptEntries.forEach(e => { delete e.seq; });
+        maxSeqSeen = seq;
+      } else if (seq > maxSeqSeen) {
+        maxSeqSeen = seq;
+      }
       transcriptEntries.push({ text: String(msg.text ?? ''), ts: Number(msg.ts) || 0, seq });
+      // 内存里也按同一上限裁剪：本列表原本只增不减，而 renderTranscript 每次全量重渲
+      //（O(n) 字符串拼接 + innerHTML），几小时的长会话下来内存与每句渲染耗时都会线性恶化。
+      // 存储侧本来就是同一上限，裁掉最老的条目与"记录里能看到的历史"一致。
+      if (transcriptEntries.length > TRANSCRIPT_MAX) {
+        transcriptEntries.splice(0, transcriptEntries.length - TRANSCRIPT_MAX);
+      }
       renderTranscript();
       break;
     }

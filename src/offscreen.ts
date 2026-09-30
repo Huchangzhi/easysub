@@ -18,6 +18,9 @@ let port: chrome.runtime.Port;
 
 const engine = new AsrEngine({
   resolveUrl: (p) => chrome.runtime.getURL(p),
+  // pushMs 缺省 0 = pull 模式（主线程 60ms flush）。扩展侧必须保持 pull：
+  // offscreen 文档不受标签页节流影响，而"发 flush → 收回包"的因果链正是延迟指示的
+  // 测量口径，改成 push 会让回包与 flush 不再对应、延迟数值系统性失真。
   sink: {
     log(message: string) {
       console.log('[易字幕 Offscreen]', message);
@@ -114,6 +117,18 @@ function setupPort() {
           // 此前"取消"是假的，临时 worker 会继续把 216MB 翻译模型加载完（白烧数秒 CPU）才收尾。
           engine.cancelTranslateTest();
           break;
+        case 'TRANSLATION_MODEL_IMPORTED':
+          // 面板刚导入/更新翻译模型：解除"缺模型"记忆，运行中的会话无需重启即可出译文。
+          engine.notifyTranslationModelImported();
+          break;
+        case 'TRANSLATION_SETTINGS_LIVE':
+          // 会话运行中改了实时翻译开关/方向/时机：当场生效
+          engine.setTranslationLive(
+            msg.enabled === true,
+            msg.direction === 'zh-en' || msg.direction === 'en-zh' ? msg.direction : 'auto',
+            msg.timing === 'final' ? 'final' : 'stream',
+          );
+          break;
         case 'MIC_CHUNK':
           // mic 模式音频入口：悬浮窗（可见扩展页）采集 PCM，经 bg 逐块转发至此。
           // 坑：Port 走 JSON 克隆，ArrayBuffer 到这里已变成普通数组（见 floating.ts 注释），
@@ -131,7 +146,10 @@ function setupPort() {
           break;
       }
     } catch (err) {
-      console.log('[TM Offscreen] 消息处理异常:', err);
+      // 坑：必须走 log 通道上抛。写成 console.log 的话，offscreen 的 console 只有打开
+      // 扩展的"检查视图"才能看到 —— 消息路由异常（例如某条消息分支写错）会表现为
+      // "点了没反应且毫无线索"，面板日志里一片空白。
+      engine.log('消息处理异常: ' + ((err as any)?.stack || err));
     }
   });
 }

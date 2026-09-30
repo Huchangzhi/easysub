@@ -28,6 +28,40 @@ const ortPatterns = [
   { from: 'node_modules/onnxruntime-web/dist/ort.bundle.min.mjs', to: 'ort.bundle.min.mjs' },
 ];
 
+// 构建前置断言（两类，缺一不可）：
+//   ① sherpa-onnx 运行时（main-asr.js/.wasm 等）不进 git，靠 `npm run download-wasm` 取得。
+//      缺失时 CopyPlugin 只会静默跳过一个 pattern，产物少文件却构建成功——在浏览器里
+//      表现为"识别永远起不来"，极难定位。
+//   ② sherpa-onnx-asr.js / sherpa-onnx-punctuation.js 是**仓库里 git 跟踪的补丁版**，
+//      下载包铺开后必须是打过补丁的那一份。有人手动用 release 原始版覆盖的话，构建能过、
+//      运行时才炸（config 被整体替换 / module 未定义），所以这里连"是不是补丁版"一起校验。
+const PATCHED_LOADERS = ['public/wasm/sherpa-onnx-asr.js', 'public/wasm/sherpa-onnx-punctuation.js'];
+function assertWasmAssets() {
+  const required = [
+    'public/wasm/sherpa-onnx-wasm-main-asr.js',
+    'public/wasm/sherpa-onnx-wasm-main-asr.wasm',
+    'public/wasm/sherpa-onnx-punctuation.js',
+    'public/wasm/sherpa-onnx-asr.js',
+    'public/wasm/preload.js',
+  ];
+  const missing = required.filter((p) => !fs.existsSync(path.resolve(__dirname, p)));
+  if (missing.length) {
+    throw new Error(
+      `缺少 WASM 运行时文件：\n  ${missing.join('\n  ')}\n` +
+      '请先执行 `npm run download-wasm`（Linux/macOS 用 `npm run download-wasm:sh`）。',
+    );
+  }
+  const unpatched = PATCHED_LOADERS.filter((p) => !read(p).includes('补丁版本'));
+  if (unpatched.length) {
+    throw new Error(
+      `以下文件不是 git 跟踪的补丁版本（缺失补丁标记）：\n  ${unpatched.join('\n  ')}\n` +
+      '很可能是用 `npm run download-wasm` 铺开的 release 原始版覆盖了补丁版。\n' +
+      '请执行：git checkout -- public/wasm/sherpa-onnx-asr.js public/wasm/sherpa-onnx-punctuation.js\n' +
+      '（两个下载脚本与 CI 都会自动还原这一份，见 README「开发」的 ⚠️ 说明。）',
+    );
+  }
+}
+
 // 字幕浮窗外壳（扩展悬浮窗 + Web 字幕浮窗）共用一份 markup/style，同 popup 的处理方式
 function buildSubtitleTemplate(shellPath) {
   return read(shellPath)
@@ -66,6 +100,8 @@ const workerBanner = () => new webpack.BannerPlugin({
 
 // ============ ① 浏览器扩展（MV3，默认构建） ============
 function extensionConfig() {
+  // 同样的前置断言：扩展产物里若缺 wasm 运行时，识别也是永远起不来（见 assertWasmAssets）
+  assertWasmAssets();
   return {
     ...baseRules,
     entry: {
@@ -127,6 +163,11 @@ function extensionConfig() {
 //   ③ 不打包 412MB 的识别模型 .data（GitHub Pages 单文件上限 100MB），
 //      用户首次使用时在面板里一键下载或手动导入一次（存 IndexedDB）。
 function webConfig() {
+  // 坑：sherpa-onnx 的 wasm 与加载器脚本不进 git（见 README「开发」），必须在构建时
+  // 显式校验存在——否则 CopyPlugin 会静默跳过，构建"成功"但产物跑不起来（页面注入
+  // wasm 脚本 404 → waitForWasm 30s 超时，识别永远起不来，且现象与"环境不合格"相似，
+  // 排查成本极高）。扩展构建同理，但它的产物本来就要求这些文件，这里一并断言。
+  assertWasmAssets();
   return {
     ...baseRules,
     entry: {

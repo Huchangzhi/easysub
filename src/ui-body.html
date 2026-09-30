@@ -400,6 +400,13 @@
     <p class="subpanel-hint" id="hotwordsNextRun"></p>
   </div>
 
+  <!-- 模型引导的遮罩层（纯 Web 版用）。扩展弹窗只有 380px，内置 subpanel 浮层已占满整窗，
+       不需要遮罩；Web 版是整页，加一层遮罩 + 居中大卡才够醒目（实测反馈"看不到那个框"）。
+       默认 hidden；只有宿主声明 modelGuideStyle:'modal' 时面板才会把它显隐。
+       注：它和 asrModelPanel 是兄弟节点，所以遮罩必须在 DOM 上位于面板**之前**
+       （面板 z-index 更高、且必须盖在遮罩上）。 -->
+  <div class="asr-backdrop" id="asrBackdrop" hidden></div>
+
   <!-- 语音识别模型缺失·窗中窗：nomodel 版安装包点「启动」时引导下载+导入一次 -->
   <div class="subpanel" id="asrModelPanel" hidden>
     <div class="subpanel-head">
@@ -431,6 +438,16 @@
       <button type="button" id="btnAsrModelImport" class="icon-btn" style="width:100%;justify-content:center;gap:6px;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
         <span id="asrModelImportLabel">选择已下载的模型文件导入</span>
+      </button>
+    </div>
+    <!-- 模型就绪后的续跑区（纯 Web 版用）。扩展侧下载/导入成功即自动续跑，
+         这里保持 hidden；Web 侧因为系统音频必须在新手势内弹屏幕选择器，
+         "自动续跑"做不到（手势已过期），改成一个显眼的主按钮请用户点一下。 -->
+    <div id="asrReadyRow" hidden>
+      <p class="subpanel-hint" id="asrReadyHint"></p>
+      <button type="button" id="btnAsrModelStartNow" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.5 4.5a.5.5 0 0 1 .75-.433l12 8a.5.5 0 0 1 0 .866l-12 8A.5.5 0 0 1 6.5 20.5v-16z"/></svg>
+        <span id="asrModelStartNowLabel">开始识别</span>
       </button>
     </div>
     <span class="model-info" id="asrModelStatus"></span>

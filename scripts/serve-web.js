@@ -41,10 +41,20 @@ if (!fs.existsSync(path.join(ROOT, 'index.html'))) {
 }
 
 const server = http.createServer((req, res) => {
-  const urlPath = decodeURIComponent(req.url.split('?')[0]);
-  let filePath = path.join(ROOT, urlPath === '/' ? 'index.html' : urlPath);
-  // 防目录穿越：解析后必须仍在产物目录内
-  if (!filePath.startsWith(ROOT)) {
+  // 畸形百分号编码（如 /%）会让 decodeURIComponent 抛 URIError，%00 会让 path.join
+  // 抛 ERR_INVALID_ARG_VALUE——两者不接住都会把 dev server 直接打挂。
+  let urlPath;
+  let filePath;
+  try {
+    urlPath = decodeURIComponent(req.url.split('?')[0]);
+    // 防目录穿越：解析后必须仍在产物目录内（比较带分隔符，防 dist-web-evil 这类
+    // 兄弟目录的前缀碰撞）。path.join 对非法路径会抛，所以一起放进 try。
+    filePath = path.join(ROOT, urlPath === '/' ? 'index.html' : urlPath);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('400 Bad Request');
+    return;
+  }
+  if (filePath !== ROOT && !filePath.startsWith(ROOT + path.sep)) {
     res.writeHead(403).end('Forbidden');
     return;
   }
@@ -66,13 +76,30 @@ const server = http.createServer((req, res) => {
     'Cross-Origin-Resource-Policy': 'cross-origin',
     'Cache-Control': 'no-store',
   };
-  // Range 支持：412MB 的 .data 走完整 GET 也可以，但浏览器 DevTools 里分段看更友好
+  // Range 支持：412MB 的 .data 走完整 GET 也可以，但浏览器 DevTools 里分段看更友好。
+  // 三态：`a-b` 正常区间 ｜ `a-` 到文件尾 ｜ `-n` 末尾 n 字节（suffix range，不能当成 0-n）。
   const range = req.headers.range;
   if (range) {
-    const m = /bytes=(\d*)-(\d*)/.exec(range);
-    if (m) {
-      const start = m[1] ? Number(m[1]) : 0;
-      const end = m[2] ? Number(m[2]) : stat.size - 1;
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+    if (m && (m[1] || m[2])) {
+      let start: number;
+      let end: number;
+      if (!m[1]) {
+        // suffix：请求最后 m[2] 字节
+        const n = Number(m[2]);
+        start = Math.max(0, stat.size - n);
+        end = stat.size - 1;
+      } else {
+        start = Number(m[1]);
+        end = m[2] ? Number(m[2]) : stat.size - 1;
+      }
+      // 非法区间（start > end、越过文件尾）按 416 拒掉，否则 Content-Length 为负
+      // 会直接崩掉这条连接
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= stat.size) {
+        res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` }).end();
+        return;
+      }
+      end = Math.min(end, stat.size - 1);
       res.writeHead(206, {
         ...headers,
         'Content-Length': end - start + 1,

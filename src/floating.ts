@@ -25,6 +25,12 @@ port.onDisconnect.addListener(() => {
 // 出块，交 bg 转发给 offscreen 的识别管道。首次使用的授权弹窗就挂在本窗口上。
 // 采集实现走共享的 mic-capture.ts（Web 版同一份），本文件只管"采集端在哪"这个宿主差异。
 const micHost = new MicCapture({
+  // pushMs：悬浮窗可能被用户最小化或压在别的窗口后面（置顶画中画时原窗就是最小化的）。
+  // 被最小化/隐藏的窗口 setTimeout 会被 Chrome 节流，pull 模式下麦克风音频只进不出、
+  // 识别静默停摆——所以这一端也交给音频线程自己按 60ms 出块。
+  // 麦克风链路不参与"flush 往返延迟"的测量（recordLatency 只服务引擎的系统/标签页采集），
+  // 因此这里开 push 不会让任何指标失真。
+  pushMs: 60,
   onChunk: (f32, sampleRate) => {
     // 坑：chrome.runtime.Port 的 postMessage 走 JSON 结构化克隆，ArrayBuffer 会被
     // 序列化成空对象（byteLength 丢失、字节内容全无），PCM 静默变垃圾。

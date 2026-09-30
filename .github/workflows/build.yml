@@ -77,7 +77,9 @@ jobs:
       - name: Download sherpa-onnx WASM
         run: |
           TMPDIR=$(mktemp -d)
-          curl -sL             "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"             | tar xj -C "$TMPDIR"
+          curl -sL \
+            "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
+            | tar xj -C "$TMPDIR"
           mkdir -p public/wasm
           find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
           rm -rf "$TMPDIR"
@@ -99,11 +101,14 @@ jobs:
           zip -r ../easysub-web${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' && format('-v{0}', github.event.inputs.version) || '' }}.zip .
           cd ..
           ls -lh easysub-web*.zip
-          # 体积守卫：web 包不该出现 412MB 的模型（出现即说明 webpack 排除规则失效）
+          # 产物守卫（两类）：
+          #   ① web 包不该出现 412MB 的模型（出现即说明 webpack 排除规则失效）；
+          #   ② 单个文件不得超过 100MB（GitHub Pages 的硬限制），顺带拦住将来误加的大文件。
           if unzip -l easysub-web*.zip | grep -q 'sherpa-onnx-wasm-main-asr.data'; then
             echo "::error::web 构建里混进了识别模型 .data，检查 webpack.config.js 的 ignore 规则"
             exit 1
           fi
+          unzip -l easysub-web*.zip | awk 'NR>3 && $1 ~ /^[0-9]+$/ { if ($1 > 104857600) { print "::error file=" $4 "::超过 GitHub Pages 单文件 100MB 上限"; bad=1 } } END { exit bad }'
 
       - uses: actions/upload-artifact@v4
         with:

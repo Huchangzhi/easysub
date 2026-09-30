@@ -15,7 +15,7 @@ import { tSync } from './i18n';
 import { addPunctuation } from './punctuator';
 import { resample } from './audio-processor';
 import { getModelFile } from './model-db';
-import { hasBundledResource } from './platform';
+import { probeBundledResource } from './platform';
 
 // ---- wasm 脚本动态注入（nomodel 支持）----
 // 宿主页面只静态加载 preload.js（仅定义 Module 不拉资源）。三个 wasm 脚本必须等
@@ -50,6 +50,11 @@ export interface EngineSink {
 export interface EngineOptions {
   resolveUrl: (path: string) => string;
   sink: EngineSink;
+  // AudioWorklet 出块模式：>0 表示由音频线程每 N 毫秒主动回吐（push），缺省 0 为
+  // 主线程定时 flush（pull）。仅当宿主页面可能在后台/被盖住时才传（见 worklet 文件注释）。
+  // 扩展侧**必须保持 pull**：offscreen 文档不受节流影响，而"发 flush → 收回包"的因果
+  // 关系正是延迟指示的测量口径，push 会让回包与 flush 不再对应、数值失真。
+  pushMs?: number;
 }
 
 export interface InitOptions {
@@ -82,6 +87,8 @@ declare function createOnlineRecognizer(Module: any, config: any): any;
 export class AsrEngine {
   private resolveUrl: (path: string) => string;
   private sink: EngineSink;
+  // 0 = 主线程定时 flush（扩展）；>0 = 音频线程主动出块（Web，见 EngineOptions.pushMs）
+  private pushMs: number;
 
   private pipeline: Pipeline | null = null;
   private reconnectTabId: number | null = null;
@@ -163,6 +170,7 @@ export class AsrEngine {
   constructor(opts: EngineOptions) {
     this.resolveUrl = opts.resolveUrl;
     this.sink = opts.sink;
+    this.pushMs = Math.max(0, Number(opts.pushMs) || 0);
   }
 
   // 预热：把 IndexedDB 模型读成 blob URL 并注入三个 wasm 脚本。
@@ -204,7 +212,9 @@ export class AsrEngine {
     this.sessionEpoch++;
     const epoch = this.sessionEpoch;
     this.reconnectTabId = msg.tabId ?? null;
-    this.reconnectStreamId = null;
+    // 扩展的 background 目前不在 INIT 里带 streamId（tab 流由 STREAM_READY 后补），
+    // 但保持与旧实现同构：带上就记下来，重连上报时一并还原，免得日后 bg 补发该字段时静默失效。
+    this.reconnectStreamId = (msg as any).streamId || null;
     this.reconnectSource = msg.source === 'system' ? 'system' : msg.source === 'mic' ? 'mic' : 'tab';
     if (msg.lang) this.currentLang = msg.lang;
     this.usePunct = msg.usePunct !== false;
@@ -280,8 +290,33 @@ export class AsrEngine {
       }
       if (needLoadModel) this.sendStatus('loadingModel');
       await this.waitForWasm();
+      // 识别器配置指纹：端点阈值与热词都在 createOnlineRecognizer 时一次性烘焙进 WASM
+      // 配置，运行时改不了。扩展侧靠"停止即销毁 offscreen 文档"天然拿到新配置；纯 Web 版
+      // 页面常驻不销毁，若只看"有没有 recognizer"，用户第二场会话起改了阈值/热词会**永不生效**
+      // （看起来像功能坏了）。这里比对指纹，变了就把旧识别器 free 掉再按新配置重建。
+      //
+      // 为什么 free+create 是安全的（与文件顶部"WASM 无法二次加载模型"的警告不冲突）：
+      // 那条警告针对的是①重新求值 wasm 加载器、②同时存在两个识别器（模型经 .data 常驻
+      // MEMFS，两份推理会话会让内存峰值翻倍）。同一 Module 内先销毁再新建走的是
+      // SherpaOnnxDestroyOnlineRecognizer → SherpaOnnxCreateOnlineRecognizer 的正常
+      // 生命周期，模型映像仍只有一份。此刻上一场的 pipeline 已在 init 开头 stop（流已 free），
+      // 本场 pipeline 尚未 start，不存在活着的流引用旧句柄。
+      const recCfgKey = JSON.stringify([
+        msg.endpointRule1 ?? null, msg.endpointRule2 ?? null, msg.endpointRule3 ?? null,
+        Array.isArray(msg.hotwords) && msg.hotwords.length ? msg.hotwords : null,
+      ]);
+      if ((window as any).__recognizer && recognizerCfgKey !== null && recognizerCfgKey !== recCfgKey) {
+        this.log('识别配置已变更，重建识别器');
+        try {
+          (window as any).__recognizer.free?.();
+        } catch (e) {
+          this.log('释放旧识别器失败（继续重建）: ' + e);
+        }
+        (window as any).__recognizer = null;
+      }
       if (!(window as any).__recognizer) {
         this.createRecognizer(msg);
+        recognizerCfgKey = recCfgKey;
       }
       if (this.usePunct && !(window as any).__punctuator) {
         try {
@@ -319,9 +354,17 @@ export class AsrEngine {
       }
       // mic：什么都不做——宿主采集的 PCM 会以 feedMicChunk 持续流入
     } catch (e: any) {
-      const desc = await this.describeWasmException(e);
+      // 坑：模型缺失（MODEL_MISSING）是**预期内的用户态**，不是故障——面板本应先弹引导
+      // 拦下，但测试翻译等路径会绕过那道门卫。这里必须换成可读文案，否则用户看到的是
+      // 「Pipeline启动失败: MODEL_MISSING」这种内部标记（既不像错误也不给下一步）。
+      const raw = e?.message || String(e);
+      const desc = raw === ERR_MODEL_MISSING
+        ? tSync(this.currentLang, 'asrModelMissingRuntime')
+        : await this.describeWasmException(e);
       this.log('INIT 异常: ' + desc);
       this.sink.toPanel({ type: 'ERROR', message: `Pipeline启动失败: ${desc}` });
+      // 会话注定跑不起来：请求宿主收敛，别把界面停在"识别中"（幽灵会话）
+      if (raw === ERR_MODEL_MISSING) this.sink.requestStop();
     }
   }
 
@@ -349,6 +392,19 @@ export class AsrEngine {
   setPunctuation(enabled: boolean) {
     this.usePunct = enabled !== false;
     this.log('标点功能: ' + (this.usePunct ? '开' : '关'));
+    // 会话中从关到开：标点模型只在 init 时按当时的开关创建，这里不补建的话会静默退到
+    // 规则标点（punctuator.ts 的兜底），效果与"标点已开"的预期不一致且没有任何提示。
+    // 补建失败只记日志：规则标点仍可用，不阻断识别。
+    if (this.usePunct && !(window as any).__punctuator && (window as any).Module) {
+      try {
+        (window as any).__punctuator = new (window as any).OfflinePunctuation({
+          model: { ctTransformer: 'model.punct.int8.onnx', numThreads: 1, provider: 'cpu' },
+        }, (window as any).Module);
+        this.log('标点模型已就绪（会话中开启）');
+      } catch (e) {
+        this.log('标点模型初始化失败，暂时使用规则标点: ' + e);
+      }
+    }
   }
 
   // 端点阈值只在建 recognizer 时一次性烘焙，运行时改不了；此处仅记录日志
@@ -437,6 +493,26 @@ export class AsrEngine {
 
   private createTranslateWorker() {
     this.translateWorker = new Worker(this.resolveUrl('translation-worker.js'));
+    // worker 脚本本身加载失败（部署漏文件/MIME 错/模块求值期抛错）时不会有人回包：
+    // 在途任务永远挂着、队列持续堆积、用户只看到"开了翻译却永远没译文"且没有任何提示。
+    // 这里必须**放弃本场翻译**而不是重试：脚本加载失败时 postMessage 无人接收、也不会
+    // 再触发 onerror，重试只会让 inFlight 再次卡住；translateWarned 这个一次性告警门
+    // 正好用来止住后续入队（导入翻译模型时会经 notifyTranslationModelImported 复位）。
+    this.translateWorker.onerror = (e: any) => {
+      this.inFlight = null;
+      this.transQueue.length = 0;
+      this.streamSlot = null;
+      this.finishTranslateTest({ ok: false, error: 'worker-error' });
+      if (!this.translateWarned) {
+        this.translateWarned = true;
+        this.log('翻译不可用：翻译 worker 加载/运行失败（' + (e?.message || e?.filename || '未知错误') +
+          '）。请检查 translation-worker.js 是否随构建一起部署。');
+      }
+    };
+    this.translateWorker.onmessageerror = () => {
+      this.log('翻译 worker 消息解析失败（已跳过该条）');
+      this.inFlight = null;
+    };
     this.translateWorker.onmessage = (e) => {
       const m = (e.data || {}) as any;
       if (m.type !== 'TRANSLATION') return;
@@ -483,7 +559,8 @@ export class AsrEngine {
       this.log(`[译] 交付 seq=${job.seq}/${job.kind} → "${String(text).slice(0, 30)}"`);
     } else if (m.reason === 'no-model' && !this.translateWarned) {
       this.translateWarned = true;
-      this.log('翻译不可用：未检测到翻译模型。请在面板"实时翻译"中点击"选择模型"安装官方模型包');
+      // 保留发布页地址：用户没有其它自助恢复途径，日志是唯一告知渠道（扩展侧原文如此）
+      this.log('翻译不可用：未检测到翻译模型。请在面板"实时翻译"中点击"选择模型"安装官方模型包（github.com/huchangzhi/easysub/releases）');
     } else if (m.error && !this.translateWarned) {
       this.translateWarned = true;
       this.log('翻译出错: ' + m.error);
@@ -554,6 +631,10 @@ export class AsrEngine {
           resolve({ ok: false, error: 'worker-create-fail' });
           return;
         }
+      } else {
+        // 复用会话自己的 worker：它不属于测试，取消测试时绝不能 terminate 掉
+        // （否则正在跑的会话从此静默丢译，且没有任何报错）。
+        this.testOwnedWorker = false;
       }
       this.translateTestResolver = resolve;
       // 测试用 24 个 token 上限：短句足够验证模型可用，避免单线程生成跑满 128 token 久久不返回
@@ -599,6 +680,49 @@ export class AsrEngine {
     this.translateWorker?.terminate();
     this.translateWorker = null;
     this.translateWarned = false;
+    // 测试若还在途（worker 已 terminate，onmessage 永远不会回来），立刻收敛——
+    // 否则面板的"测试翻译"按钮要卡满 120s 超时才解开。无在途测试时是空操作。
+    this.finishTranslateTest({ ok: false, error: 'cancelled' });
+  }
+
+  // 翻译模型（重新）导入后由宿主调用：解除两处"缺模型"的记忆，让正在运行的会话
+  // 不重启就能开始出译文。
+  //   ① translateWarned —— 一次性告警门，立起后 translateStream/translateFinal 直接
+  //      早退，不再入队；
+  //   ② worker 里的加载缓存 —— 缺模/加载失败的结果都被记忆化，转发 RESET_MODEL_CACHE
+  //      让下一句重新检查 IndexedDB（模型导入后立即生效）。
+  // 若翻译本身没开（worker 不存在），仅复位告警门：下次 INIT 带上翻译开关时自会建 worker。
+  // 坑：还要处理"会话开着、翻译 worker 也建好了，但用户此刻才勾上实时翻译开关"的情况——
+  // 翻译开关只在 INIT 时定格（translateEnabled=false 就不建 worker），运行中勾选如果什么都不做，
+  // 用户会以为"开了没反应"。这里补上：开关打开且尚无 worker 就建一个，本场立即开始出译文。
+  notifyTranslationModelImported() {
+    this.translateWarned = false;
+    if (this.translateEnabled) this.ensureTranslateWorker();
+    this.translateWorker?.postMessage({ type: 'RESET_MODEL_CACHE' });
+  }
+
+  // 运行中改实时翻译设置（面板在会话进行中切换开关/方向/时机时调用）。
+  // 为什么需要它：翻译开关/方向/时机原本只在 INIT 时定格，运行中改了不生效、也没有任何
+  // 反馈，用户会以为"开了没反应、改了没用"。这里把三个字段更新到当前会话并补齐 worker，
+  // 当场生效（扩展侧同一份实现，两端行为一致）。
+  // 注意方向/时机只影响后续请求：在途那条仍按发出时的方向返回，回包按 seq+gen 对账，
+  // 不会错位；切到 final 只是不再入队中间态。
+  setTranslationLive(enabled: boolean, direction: 'auto' | 'zh-en' | 'en-zh', timing: 'stream' | 'final') {
+    this.translateEnabled = enabled;
+    this.translateDirection = direction;
+    this.translationTiming = timing;
+    this.log(`实时翻译（本场生效）: ${enabled ? '开' : '关'} 方向=${direction} 时机=${timing}`);
+    if (!enabled) {
+      // 关掉就停掉在途与积压，不再占用 CPU；worker 留着下次秒开
+      this.inFlight = null;
+      this.transQueue.length = 0;
+      this.streamSlot = null;
+      return;
+    }
+    this.translateWarned = false;
+    this.ensureTranslateWorker();
+    // 刚打开时把"当前这一句"补进去：否则要等到下一句才有译文，用户以为没生效
+    if (this.prevSentence) this.translateBacklog(this.sentenceSeq - 1, this.prevSentence);
   }
 
   private translateStream(text: string) {
@@ -781,7 +905,9 @@ export class AsrEngine {
     // 接管；继续往下就会在"已不是当前"的 ctx 上建节点，而旧 ctx 无人 close。
     if (this.audioCtx !== ctx) { ctx.close().catch(() => {}); return; }
 
-    const node = new AudioWorkletNode(ctx, 'audio-buffer');
+    const node = new AudioWorkletNode(ctx, 'audio-buffer', {
+      processorOptions: { pushMs: this.pushMs },
+    });
     this.workletNode = node;
     source.connect(node);
     // 坑：AudioWorkletNode 在"只有上游连接、自身不接下游"时 process() 是否仍被渲染图拉取，
@@ -825,13 +951,24 @@ export class AsrEngine {
           // 坑：采样率取本地 ctx 而不是类字段!——后者在停机/接管后为 null，
           // 会在迟到回包里抛未捕获 TypeError。
           const sr = e.data.sampleRate || ctx.sampleRate;
-          const arrivedAt = performance.now();
+          const t0 = performance.now();
           this.pipeline?.feedAudio(sr === 16000 ? buf : resample(buf, sr, 16000));
-          this.recordLatency(this.lastFlushSentAt > 0 ? Math.max(0, arrivedAt - this.lastFlushSentAt) : 0,
-            performance.now() - arrivedAt);
+          // 口径随出块模式切换（见 scheduleFlush 的注释）：
+          //   pull：回包由我们发的 flush 触发，RTT 有意义（t0 - lastFlushSentAt）。
+          //   push：回包由音频线程自己发出，与任何一次 flush 都没有因果关系，
+          //         那个差值只会是"距上次 flush 的陈旧时间"，数值系统性失真——
+          //         所以 push 下只统计本块的同步处理耗时。
+          const rtt = this.pushMs > 0 || this.lastFlushSentAt <= 0
+            ? 0
+            : Math.max(0, t0 - this.lastFlushSentAt);
+          this.recordLatency(rtt, performance.now() - t0);
         }
       }
     };
+
+    // 只在 pull 模式下跑 flush 定时器链。push 模式下 worklet 自己出块，这条链纯属多余，
+    // 而且它写下的 lastFlushSentAt 会让延迟指示显示出虚假的 RTT（见上面的口径说明）。
+    if (this.pushMs > 0) return;
 
     const scheduleFlush = () => {
       this.flushTimer = setTimeout(() => {
@@ -1007,11 +1144,17 @@ export class AsrEngine {
 // ================= 宿主无关的纯函数 =================
 
 // —— wasm 脚本注入：**文档级一次性** ——
-// 坑：必须放在模块作用域而不是实例字段里。扩展的重连路径会新建一个 AsrEngine 实例
-// （setupPort 被重入），若注入状态挂在实例上就会把 sherpa-onnx-wasm-main-asr.js
-// 再求值一遍——那个加载器用 `var Module = typeof Module != "undefined" ? Module : {}`
-// 复用已有 Module，二次求值会重新注册运行时、撞上"模型二次加载导致 WASM 堆崩溃"。
+// 坑：必须放在模块作用域而不是实例字段里。注入状态若挂在实例上，出现第二个实例
+// （未来的重连/多会话策略）就会把 sherpa-onnx-wasm-main-asr.js 再求值一遍——
+// 那个加载器用 `var Module = typeof Module != "undefined" ? Module : {}` 复用已有
+// Module，二次求值会重新注册运行时、撞上"模型二次加载导致 WASM 堆崩溃"。
+// 如今扩展 offscreen 与 Web 面板页都持有模块级单例引擎，这条防线是按最坏情况设防的。
 let wasmScriptsReady: Promise<void> | null = null;
+
+// 当前 window.__recognizer 是按哪套配置（端点阈值 + 热词）建出来的。null = 尚未建过。
+// 配置在 createOnlineRecognizer 时一次性烘焙，配置变了必须 free 重建（见 init 里的比对）；
+// 没有它的话，Web 版页面常驻时第二场会话起改阈值/热词永不生效。
+let recognizerCfgKey: string | null = null;
 
 function injectWasmScripts(resolveUrl: (p: string) => string): Promise<void> {
   if (wasmScriptsReady) return wasmScriptsReady;
@@ -1035,7 +1178,12 @@ function injectWasmScripts(resolveUrl: (p: string) => string): Promise<void> {
     // worker 池初始化上抛 DataCloneError（要 crossOriginIsolated）——运行时会落在半初始化
     // 状态，用户随后即使导入模型也难恢复。宁可不加载，直接抛一条宿主能识别的错误，
     // 由面板弹"下载/导入模型"引导（扩展 full/lite 版包内自带，走不到这里）。
-    if (!imported && !(await hasBundledResource(ASR_DATA_PATH))) {
+    // 坑：必须用三态探测，只有明确 absent 才算缺模型；unknown 一律照旧注入，
+    // 让加载器去给出真实错误。三态只在 Web 托管场景生效——扩展侧 probeBundledResource
+    // 保持 master 的布尔语义（chrome-extension:// 取不存在的资源是 fetch 抛错而非 404），
+    // 所以 full/lite 版恒为 present，nomodel 版缺模型时在这里干净地抛 ERR_MODEL_MISSING
+    // （由宿主弹下载/导入引导），不会像旧实现那样先起 pthread 运行时再炸在半路。
+    if (!imported && (await probeBundledResource(ASR_DATA_PATH)) === 'absent') {
       throw new Error(ERR_MODEL_MISSING);
     }
     // preload.js 只在宿主没自带时注入（扩展的 offscreen.html 静态加载了它，

@@ -4,6 +4,7 @@
   "description": "免费、安全的基于本地模型的实时字幕浏览器扩展",
   "scripts": {
     "download-wasm": "pwsh -ExecutionPolicy Bypass -File scripts/download-wasm.ps1",
+    "download-wasm:sh": "bash scripts/download-wasm.sh",
     "build": "webpack --mode production",
     "build:web": "webpack --mode production --env target=web",
     "dev": "webpack --mode development --watch",
@@ -26,5 +27,8 @@
   },
   "overrides": {
     "onnxruntime-web": "1.21.0"
+  },
+  "engines": {
+    "node": ">=18.12"
   }
 }

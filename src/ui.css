@@ -115,12 +115,24 @@ body {
 }
 .container { display: flex; flex-direction: column; gap: 7px; }
 /* 入场：单次淡入+轻微上浮（用户反馈 120ms 纯淡入几乎无感）——
-   幅度克制在 6px/240ms，可感知但不表演；transform 加进 transition 列表才能随 opacity 联动 */
+   幅度克制在 6px/240ms，可感知但不表演。
+   坑（整页版实测「缺模型提示太不明显」的主因之一）：不能用 transition + 常驻 transform——
+   任何非 none 的 transform 都会把所有 position:fixed 后代（模型引导卡/遮罩/不支持弹窗）
+   的包含块从视口改成 .container，于是 top:50% 变成「文档高度的一半」、遮罩随页面滚动，
+   整页版里用户滚到哪里都找不到那张卡。所以这里用一次性 keyframes：
+   动画结束即回到 transform:none，position:fixed 语义恢复正常（扩展弹窗视觉不变）。 */
 .container {
-  opacity: 0; transform: translateY(6px);
-  transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out);
+  opacity: 0;
+  transition: opacity 240ms var(--ease-out);
 }
-.container.loaded { opacity: 1; transform: translateY(0); }
+.container.loaded {
+  opacity: 1;
+  animation: container-entry 240ms var(--ease-out);
+}
+@keyframes container-entry {
+  from { transform: translateY(6px); }
+  to { transform: translateY(0); }
+}
 
 /* Stagger entry 已删除（见上：单次整体淡入替代） */
 
@@ -604,6 +616,40 @@ body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
 .asr-progress-bar { width: 100%; height: 6px; border-radius: 3px; background: var(--surface-input); overflow: hidden; }
 .asr-progress-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--accent); transition: width .2s linear; }
 .asr-progress-text { font: 400 10px/1 system-ui, sans-serif; color: var(--text2); text-align: center; }
+
+/* —— 模型引导的「模态大卡」变体 + 遮罩（纯 Web 版）——
+   .subpanel 默认 inset:0 铺满宿主窗口：扩展弹窗只有 380px，铺满即"整屏可见"，够醒目；
+   Web 版是整页（宽屏可到 1400px），同一个小卡缩在页面一角，用户实测"根本注意不到这个框"。
+   这一档把它变成带遮罩的居中大卡：遮罩压掉页面其余内容、卡本身放大一号，
+   让"缺模型"这件事在整页里也成为唯一的视觉焦点。扩展侧不挂 guide-modal，样式零影响。 */
+.asr-backdrop {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+}
+.asr-backdrop[hidden] { display: none; }
+body[data-mode="light"] .asr-backdrop { background: rgba(15, 18, 24, 0.5); }
+
+.subpanel.guide-modal {
+  position: fixed; inset: auto; z-index: 41;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(86vh, 720px);
+  padding: 18px; gap: 10px;
+  border-radius: 14px;
+}
+.subpanel.guide-modal #asrModelTitle { font-size: 15px; }
+.subpanel.guide-modal .subpanel-hint { font-size: 12px; line-height: 1.65; }
+/* 引导卡是阻断式流程，主操作按钮要明显大一号 */
+.subpanel.guide-modal #btnAsrModelDownload,
+.subpanel.guide-modal #btnAsrModelImport,
+.subpanel.guide-modal #btnAsrModelStartNow { padding: 9px 10px; font-size: 12.5px; }
+/* 模型装好后的续跑按钮：主操作语义，用强调色实底（与 .btn 主按钮同配方） */
+#btnAsrModelStartNow {
+  width: 100%; justify-content: center; gap: 6px; margin: 4px 0 2px;
+  background: var(--accent); color: #fff; border-color: transparent;
+}
+#btnAsrModelStartNow:hover { filter: brightness(1.08); }
 
 /* —— 系统音频不支持·模态提示 ——
    与 .subpanel 的区别：subpanel 是用户主动打开、有明确关闭按钮的功能面板；

@@ -29,6 +29,14 @@ let sessionSource: 'tab' | 'system' | 'mic' = 'tab';
 // 设备不在此处指定：交给 Chrome 授权弹窗选择并记住，扩展内不做设备下拉。
 // 悬浮字幕窗（独立扩展页弹窗，可置顶画中画）：仅显示端，关窗不影响识别会话。
 let floatingWinId: number | null = null;
+// 悬浮窗 id 的持久化镜像（storage.session）：SW 被回收后内存值归零，而"关的是不是悬浮窗"
+// 与"要不要开新窗"都依赖它。不落库的话，冷启动后用户在关别的窗口时会被误判成关悬浮窗
+// （system/mic 会话被无辜停掉）。
+const FLOATING_WIN_KEY = 'floatingWindowId';
+function persistFloatingWin() {
+  if (floatingWinId != null) chrome.storage.session.set({ [FLOATING_WIN_KEY]: floatingWinId }).catch(() => {});
+  else chrome.storage.session.remove(FLOATING_WIN_KEY).catch(() => {});
+}
 let floatingPort: chrome.runtime.Port | null = null;
 let pipelineStatus = 'Stopped';
 // 会话开始时刻（Date.now()）：START 成功或 FW_POP 首见 Running 时盖章；
@@ -81,16 +89,29 @@ async function openFloating() {
   if (floatingWinId != null) {
     try { await chrome.windows.update(floatingWinId, { focused: true }); return; } catch { floatingWinId = null; }
   }
+  // 坑：floatingWinId 是内存值，SW 被回收后重启就归零。同一场会话若再开窗（RECONNECT
+  // 自愈等路径），这里会以为"没开过"而新开一个——桌面上出现两个悬浮字幕窗，旧的那个
+  // 还成了没人管的孤儿（后续消息只发给新窗口）。回源持久化镜像先复用旧窗。
+  try {
+    const id = (await chrome.storage.session.get(FLOATING_WIN_KEY))[FLOATING_WIN_KEY];
+    if (typeof id === 'number') {
+      try { await chrome.windows.update(id, { focused: true }); floatingWinId = id; return; }
+      catch { persistFloatingWin(); } // 陈旧 id：清掉镜像，走新建
+    }
+  } catch { /* storage 异常：按"没开过"处理，与旧行为一致 */ }
   const win = await chrome.windows.create({
     url: 'floating.html', type: 'popup', width: 780, height: 240,
   });
   floatingWinId = win?.id ?? null;
+  persistFloatingWin();
 }
 
 function closeFloating() {
   if (floatingWinId != null) {
     chrome.windows.remove(floatingWinId).catch(() => {});
-    // floatingWinId/floatingPort 由下方 onRemoved 监听器统一清理
+    // floatingWinId/floatingPort 与镜像由下方 onRemoved 监听器统一清理。
+    // 这里**不要**抢先清空内存值：那样 onRemoved 就认不出关的是哪个窗口，
+    // floatingPort 会一直挂着，后续消息继续发给一个已消失的窗口。
   }
 }
 
@@ -254,7 +275,7 @@ chrome.runtime.onConnect.addListener((port) => {
         // seq 原样透传：popup 的 TRANSLATION_FINAL 也按它精确挂译文，两侧索引一致。
         const ts = Date.now();
         sendToPopup({ ...p, ts });
-        appendTranscript(p.text, ts, (e) => console.log('[TM BG] 转写持久化失败:', e));
+        appendTranscript(p.text, ts, Number(p.seq) || undefined, (e) => console.log('[TM BG] 转写持久化失败:', e));
       }
       if (p.type === 'LOG') console.log('[TM BG]', p.message);
       if (msg.payload?.type === 'REQUEST_STREAM') {
@@ -718,10 +739,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       chrome.storage.session.get(SESSION_KEY),
     ]).then(([lockR, snapR]) => {
       const sess = snapR[SESSION_KEY] as { tabId: number; status: string; startedAt?: number } | undefined;
-      // 坑：SW 冷启动后内存 sessionStartedAt 归零，但 storage.session 快照里还有——
-      // 回源快照优先，内存值兜底（快照只在 Running 时存在，Stopped 时两者都无意义）
-      const startedAt = (pipelineStatus === 'Running' && sess?.startedAt) || sessionStartedAt || 0;
-      sendResponse({ status: pipelineStatus, locked: lockR[LOCK_KEY] === true, startedAt, levels: bgLevels.slice() });
+      // 坑：SW 冷启动后内存 pipelineStatus/sessionStartedAt 都是初值（'Stopped'/0），而
+      // offscreen 文档独立于 SW 存活，会话可能仍在跑。快照只在 Running 时写入、停止时删除，
+      // 所以"内存说停了但对快照说在跑"只可能是 SW 刚被唤醒——此时以快照为准，
+      // 否则 popup 会在冷启动窗口期把正在跑的会话显示成已停止、停止键变灰。
+      const status = pipelineStatus === 'Running' ? pipelineStatus : (sess?.status === 'Running' ? 'Running' : pipelineStatus);
+      const startedAt = (status === 'Running' && sess?.startedAt) || sessionStartedAt || 0;
+      // 回填内存，后续同步判断（如 onRemoved 守卫）不必再等一次异步读
+      if (status !== pipelineStatus) { pipelineStatus = status; if (!sessionStartedAt && startedAt) sessionStartedAt = startedAt; }
+      sendResponse({ status, locked: lockR[LOCK_KEY] === true, startedAt, levels: bgLevels.slice() });
     }).catch(() => {
       // storage 异常时退化为内存缓存值，至少不阻塞 popup 初始化。
       sendResponse({ status: pipelineStatus, locked: overlayLocked, startedAt: sessionStartedAt, levels: bgLevels.slice() });
@@ -767,6 +793,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (offscreenPort) offscreenPort.postMessage({ type: 'SET_PUNCT', enabled: msg.enabled });
   }
 
+  if (msg.type === 'TRANSLATION_MODEL_IMPORTED') {
+    // 面板刚导入/更新翻译模型：转发给 offscreen 解除"缺模型"记忆，
+    // 运行中的会话无需重启即可开始出译文（offscreen 未建时无需转发——下次 INIT 自会生效）。
+    if (offscreenPort) offscreenPort.postMessage({ type: 'TRANSLATION_MODEL_IMPORTED' });
+  }
+
+  if (msg.type === 'TRANSLATION_SETTINGS_LIVE') {
+    // 会话运行中改了实时翻译开关/方向/时机：转发给 offscreen 当场生效。
+    // 不转发的话，运行中改这些设置是完全静默无效的（只有下次开始才生效），
+    // 用户会以为"翻译开关坏了"。
+    if (offscreenPort) offscreenPort.postMessage({
+      type: 'TRANSLATION_SETTINGS_LIVE',
+      enabled: msg.enabled,
+      direction: msg.direction,
+      timing: msg.timing,
+    });
+  }
+
   if (msg.type === 'RESET_OVERLAY_POSITION') {
     sendToDisplays({ type: 'RESET_OVERLAY_POSITION' });
   }
@@ -794,15 +838,41 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // 悬浮窗被用户关闭：system/mic 模式下它是唯一显示端（mic 模式还兼任采集端）——
 // 关闭即视为结束会话，触发统一清理（关 offscreen、停采集）；tab 模式走不到这里。
 chrome.windows.onRemoved.addListener((closedWinId) => {
-  if (closedWinId === floatingWinId) {
-    floatingWinId = null;
-    floatingPort = null;
-    if (sessionSource !== 'tab' && pipelineStatus === 'Running') {
-      console.log('[TM BG] 悬浮字幕窗已关闭，自动停止识别');
-      cleanupAll();
-    }
-  }
+  void handleFloatingClosed(closedWinId);
 });
+
+async function handleFloatingClosed(closedWinId: number) {
+  // 坑：本事件也会唤醒冷启动的 SW，那时 floatingWinId/sessionSource/pipelineStatus
+  // 全是初值（null/'tab'/'Stopped'），直接比对会把"关悬浮窗"当成无关窗口而漏掉清理，
+  // 于是 offscreen 继续空转采集（system/mic 会话已没有显示端）。与 handleCapturedTabClosed
+  // 同构：内存值不可信时回源 storage.session 的会话快照再判断。
+  let winId = floatingWinId;
+  let source = sessionSource;
+  let status = pipelineStatus;
+  // 内存值可能不可信（SW 冷启动后全是初值）：除了会话快照，窗口 id 本身也从
+  // storage.session 回源，否则"用户关的到底是不是悬浮窗"根本判不出来。
+  // 内存已经明确知道有浮窗且在跑会话时才是快路径，可以不读。
+  if (winId == null || status !== 'Running') {
+    try {
+      const stored = await chrome.storage.session.get([SESSION_KEY, FLOATING_WIN_KEY]);
+      const storedWinId = stored[FLOATING_WIN_KEY];
+      if (typeof storedWinId === 'number') winId = storedWinId;
+      const sess = stored[SESSION_KEY] as { source?: string; status?: string } | undefined;
+      if (sess) {
+        source = (sess.source as any) || source;
+        status = sess.status || status;
+      }
+    } catch { /* storage 异常时退化为纯内存判断 */ }
+  }
+  if (closedWinId !== winId) return;
+  floatingWinId = null;
+  floatingPort = null;
+  persistFloatingWin();
+  if (source !== 'tab' && status === 'Running') {
+    console.log('[TM BG] 悬浮字幕窗已关闭，自动停止识别');
+    cleanupAll();
+  }
+}
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (tabId !== captureTabId || changeInfo.status !== 'complete' || pipelineStatus !== 'Running') return;
