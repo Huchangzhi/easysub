@@ -16,7 +16,7 @@ if [ "$LITE" = true ]; then
   URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${VERSION}/sherpa-onnx-wasm-simd-v${VERSION}-zh-en-asr-zipformer.tar.bz2"
   echo "Downloading sherpa-onnx WASM lite v${VERSION}..."
 else
-  URL="https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/v1.0.0/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"
+  URL="https://github.com/easysub-org/easysub-wasm-builder/releases/download/v1.0.0/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2"
   echo "Downloading sherpa-onnx WASM full..."
 fi
 
