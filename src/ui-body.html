@@ -1,0 +1,533 @@
+
+
+  <!-- —— A. 状态 Hero 卡：大状态词 + 会话计时 + 呼吸灯 —— -->
+  <div class="hero Stopped" id="heroCard">
+    <div class="hero-top">
+      <img src="logo.jpg" style="width:22px;height:22px;border-radius:6px;flex-shrink:0;">
+      <span class="hero-title" id="appTitle">易字幕 开发版本</span>
+      <a href="https://github.com/huchangzhi/easysub" target="_blank" style="display:flex;color:var(--text2);text-decoration:none;" title="GitHub">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+      </a>
+      <!-- 浏览器兼容性检测：随时手动打开/重开检测弹窗（不受"已读"记忆限制）。
+           aria-label/title 由 panel.ts applyLang 按 i18n 刷新 -->
+      <button type="button" id="btnCompat" class="icon-btn" style="padding:3px 5px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+      </button>
+      <button id="btnLang" class="icon-btn lang-switch">EN</button>
+    </div>
+    <div class="hero-status">
+      <span class="status-dot Stopped" id="statusDot"></span>
+      <span class="hero-state" id="statusWord">待命</span>
+      <span class="hero-timer" id="sessionTimer">00:00</span>
+    </div>
+    <!-- 实时波形条：仅面板打开且 Running 时 rAF 重绘；canvas 宽度由 JS 按容器实际宽×dpr 设置 -->
+    <canvas id="waveCanvas" class="wave" aria-hidden="true"></canvas>
+    <!-- 坑：波形开关必须紧贴波形（用户实测"开关离波形太远"），从「外观」卡迁入 Hero；
+         用 toggle-sm 紧凑档+右对齐小字，避免喧宾夺主。onchange 逻辑零改动。 -->
+    <div class="row hero-wave-row">
+      <label for="chkWaveform" id="showWaveform">波形显示</label>
+      <input type="checkbox" id="chkWaveform" class="toggle-sm" checked>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnWaveform" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipWaveform">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipWaveform">在顶部 Hero 卡内实时显示音量电平波形（左端更早、右端最新）。仅面板打开且识别运行时渲染，关面板即停、无后台开销；关闭后显示静止基线。</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="btnStart" class="btn">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.5 4.5a.5.5 0 0 1 .75-.433l12 8a.5.5 0 0 1 0 .866l-12 8A.5.5 0 0 1 6.5 20.5v-16z"/></svg>
+      <span id="btnStartText">开始</span>
+    </button>
+    <button id="btnStop" class="btn" disabled>
+      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+      <span id="btnStopText">停止</span>
+    </button>
+  </div>
+
+  <!-- —— B1. Bento 卡「识别」：音频来源 + 流式标点 + 端点滑杆 + 模型信息 —— -->
+  <div class="card" id="cardRecognize">
+    <button type="button" id="btnReselectModel" class="icon-btn" hidden style="margin-bottom:6px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+      <span id="reselectModelLabel">重新选择识别模型</span>
+    </button>
+    <span class="section-label" id="audioSource">音频来源</span>
+    <div class="select-wrap">
+      <select id="selSource" aria-label="audio source">
+        <option value="tab" id="optSourceTab">当前标签页</option>
+        <option value="system" id="optSourceSystem">系统音频（整个屏幕）</option>
+        <option value="mic" id="optSourceMic">麦克风</option>
+      </select>
+      <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+    <!-- 无需麦克风设备下拉：首次启动时 Chrome 的授权弹窗自带设备选择，且会记住所选设备 -->
+    <!-- 超出浏览器使用的引导提示：与音源状态无关，常驻展示 -->
+    <div class="source-hint source-tip" id="sourceTip">想在浏览器之外的软件上用字幕？试试改一下音频来源</div>
+    <div class="source-hint" id="sourceHint" hidden></div>
+
+    <span class="section-label sub-gap" id="secPunct">标点/断句</span>
+    <div class="row">
+      <input type="checkbox" id="chkPunct" checked>
+      <label for="chkPunct" id="showPunct">流式标点添加</label>
+      <!-- 坑：原小字注释 punctNote 已升级为 ? 帮助气泡（文案含"为何可能降低准确率"），
+           applyLang 里对应的 punctNote 赋值必须同步删除，否则 null.textContent 会抛错 -->
+      <span class="help-wrap">
+        <button type="button" id="helpBtnPunct" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipPunct">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipPunct">开启后在识别的同时由本地标点模型即时补加标点。标点推理穿插在识别流程中同步执行，可能干扰声学识别，个别词的准确率会轻微下降；追求逐字最准可关闭。</span>
+      </span>
+    </div>
+    <div class="row">
+      <span class="slider-group" style="flex:1;">
+        <span class="slider-label" id="endpointLabel1">句尾停顿(秒)</span>
+        <span class="help-wrap">
+          <button type="button" id="helpBtnEndpoint1" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipEndpoint1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </button>
+          <span class="help-tip" role="tooltip" id="helpTipEndpoint1">说话人停下、尾部静音达到该秒数时结束当前句。调小断句更快但句子偏碎；调大句子更完整，字幕定稿稍晚。</span>
+        </span>
+        <input type="range" id="endpointRule1" min="2" max="20" value="8">
+        <span class="slider-value" id="endpointVal1">0.8s</span>
+      </span>
+    </div>
+    <div class="row">
+      <span class="slider-group" style="flex:1;">
+        <span class="slider-label" id="endpointLabel2">句中停顿(秒)</span>
+        <span class="help-wrap">
+          <button type="button" id="helpBtnEndpoint2" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipEndpoint2">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </button>
+          <span class="help-tip" role="tooltip" id="helpTipEndpoint2">连续讲话中的短停顿达到该秒数时也会尝试断句，用于切分长段语流。调小更容易在短停顿处切句，调大减少误切但单句可能偏长。</span>
+        </span>
+        <input type="range" id="endpointRule2" min="2" max="15" value="6">
+        <span class="slider-value" id="endpointVal2">0.6s</span>
+      </span>
+    </div>
+    <div class="row">
+      <span class="slider-group" style="flex:1;">
+        <span class="slider-label" id="endpointLabel3">最大句长(秒)</span>
+        <span class="help-wrap">
+          <button type="button" id="helpBtnEndpoint3" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipEndpoint3">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </button>
+          <span class="help-tip" role="tooltip" id="helpTipEndpoint3">无论是否检测到停顿，当前句累计到该时长就强制结束，避免单条字幕过长难以阅读。</span>
+        </span>
+        <input type="range" id="endpointRule3" min="5" max="40" value="15">
+        <span class="slider-value" id="endpointVal3">15s</span>
+      </span>
+      <button id="btnResetEndpoint" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.5 15.5a9 9 0 1 0 2.12-9.36L1 10"/></svg>
+        <span id="resetEndpointLabel">默认</span>
+      </button>
+    </div>
+    <div class="row">
+      <span class="model-info" id="hotwordsStatus"></span>
+      <button type="button" id="btnOpenHotwords" class="icon-btn" style="margin-left:auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        <span id="hotwordsOpenLabel">热词词典</span>
+      </button>
+    </div>
+    <span class="model-info" id="modelInfo">Zipformer · 中英双语 · 离线</span>
+  </div>
+
+  <!-- —— B2. Bento 卡「字幕显示」：显示开关/字号 + 上一句/透明度 + 回看与延迟指示 —— -->
+  <div class="card" id="cardDisplay">
+    <span class="section-label" id="secDisplay">显示</span>
+    <div class="row">
+      <input type="checkbox" id="chkOverlay" checked>
+      <label for="chkOverlay" id="showSubtitles">显示字幕</label>
+      <button id="btnLock" class="icon-btn" style="margin-left:auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 1 1 8 0v4"/></svg>
+        <span id="lockLabel">锁定</span>
+      </button>
+      <button id="btnResetOverlay" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.5 15.5a9 9 0 1 0 2.12-9.36L1 10"/></svg>
+        <span id="resetOverlayLabel">重置位置</span>
+      </button>
+    </div>
+    <div class="row">
+      <span class="slider-label" id="fontLabel">字体大小</span>
+      <input type="range" id="fontSizeSlider" min="18" max="72" value="36">
+      <span class="slider-value" id="fontSizeLabel">36</span>
+    </div>
+    <div class="row">
+      <input type="checkbox" id="chkLatency" checked>
+      <label for="chkLatency" id="showLatency">延迟指示</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnLatency" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipLatency">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipLatency">在字幕叠层右下角显示当前识别延迟（如 1.2s）。约每 2 秒更新一次文本，开销可忽略；不需要时可关闭以保持画面纯净。</span>
+      </span>
+    </div>
+
+    <span class="section-label sub-gap" id="secPrev">上一句</span>
+    <div class="row">
+      <input type="checkbox" id="chkShowPrev" checked>
+      <label for="chkShowPrev" id="showPrev">显示上一句</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnPrev" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipPrev">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipPrev">在画面上额外显示上一条已完成的句子，方便回看刚说过的内容；透明度越低上一句越淡，越不遮挡画面。</span>
+      </span>
+      <span class="slider-group">
+        <span class="slider-label" id="prevOpacity">透明度</span>
+        <input type="range" id="prevOpacitySlider" min="5" max="100" value="35">
+        <span class="slider-value" id="prevOpacityLabel">35</span>
+      </span>
+    </div>
+    <div class="row">
+      <input type="checkbox" id="chkLookback" checked>
+      <label for="chkLookback" id="showLookback">近句回看</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnLookback" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipLookback">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipLookback">点击字幕窗左上角的小箭头展开近句回看：最新一句排在最上面，越往下越早。仅存内存不落地，零常驻开销。</span>
+      </span>
+    </div>
+
+    <!-- —— 实时翻译（离线自带模型，设置下次启动生效）—— -->
+    <span class="section-label sub-gap" id="secTranslate">实时翻译</span>
+    <div class="row">
+      <input type="checkbox" id="chkTranslate">
+      <label for="chkTranslate" id="showTranslate">启用翻译</label>
+      <span class="experimental-badge" id="experimentalLabel">实验性</span>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnTranslate" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipTranslate">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip" role="tooltip" id="helpTipTranslate">把识别字幕实时翻译成另一语言。首次使用需从 GitHub Releases 下载翻译模型（中/英双向，约 216MB），解压后点击"选择模型"选中解压出的文件夹；设置从下一次启动会话生效。翻译在独立线程离线进行，不上传任何内容。</span>
+      </span>
+      <button type="button" id="btnPickModel" class="icon-btn" style="margin-left:auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span id="pickModelLabel">选择模型</span>
+      </button>
+    </div>
+    <div class="seg-row" id="translateDirRow" role="radiogroup" aria-labelledby="secTranslate">
+      <button type="button" class="seg active" data-dir="auto" role="radio" aria-checked="true"><span class="seg-name" data-key="translateAuto">自动</span></button>
+      <button type="button" class="seg" data-dir="zh-en" role="radio" aria-checked="false"><span class="seg-name" data-key="translateZhEn">中→英</span></button>
+      <button type="button" class="seg" data-dir="en-zh" role="radio" aria-checked="false"><span class="seg-name" data-key="translateEnZh">英→中</span></button>
+    </div>
+    <div class="seg-row" id="translateTimingRow" role="radiogroup" aria-labelledby="secTranslate" style="margin-top:6px;">
+      <button type="button" class="seg active" data-timing="stream" role="radio" aria-checked="true"><span class="seg-name" data-key="translateTimingStream">实时跟句</span></button>
+      <button type="button" class="seg" data-timing="final" role="radio" aria-checked="false"><span class="seg-name" data-key="translateTimingFinal">仅定稿</span></button>
+      <span class="help-wrap" style="margin-left:auto;">
+        <button type="button" id="helpBtnTranslateTiming" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipTranslateTiming">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipTranslateTiming">实时跟句：识别过程中反复重译中间结果，出译文快但更耗 CPU（每 0.5 秒最多一次）；仅定稿：每句说完才翻译一次，最省资源、译文不闪变。设置从下一次启动会话生效。</span>
+      </span>
+    </div>
+    <div class="translate-notice" id="translateNotice" style="display:none;"></div>
+    <div class="row" style="margin-top:6px;">
+      <span class="model-info" id="translateStatus"></span>
+      <button type="button" id="btnTestTranslate" class="icon-btn" style="margin-left:auto;">
+        <span id="testTranslateLabel">测试翻译</span>
+      </button>
+    </div>
+    <input type="file" id="modelFolderPicker" webkitdirectory multiple style="display:none;">
+  </div>
+
+  <!-- —— B3. Bento 卡「历史记录」：检索 + 转写列表 + 复制/清空 —— -->
+  <div class="card" id="transcriptSection">
+    <span class="section-label" id="transcriptLabel">字幕记录</span>
+    <div class="row">
+      <input type="checkbox" id="chkShowTs" checked>
+      <label for="chkShowTs" id="showTimestamps">显示时间戳</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnTimestamps" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipTimestamps">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipTimestamps">在每句前显示 [分:秒] 时标，表示相对本次会话第一句的偏移；旧版本记录的句子没有时标信息，只显示纯文本。</span>
+      </span>
+    </div>
+    <div class="row">
+      <input type="checkbox" id="chkTranscriptTr" checked>
+      <label for="chkTranscriptTr" id="showTrInHistory">历史字幕显示翻译</label>
+    </div>
+    <div class="search-wrap">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="searchInput" placeholder="搜索历史字幕…" autocomplete="off" spellcheck="false" aria-label="搜索历史字幕">
+      <span class="search-count" id="searchCount"></span>
+      <button type="button" id="btnSearchClear" class="search-clear" aria-label="清除搜索">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="transcript-box" id="transcriptBox">
+      <div class="transcript-empty" id="transcriptEmpty">暂无字幕</div>
+    </div>
+    <div class="row">
+      <button id="btnCopy" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="12" height="16" rx="2"/><path d="M6 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1"/></svg>
+        <span id="copyLabel">复制</span>
+      </button>
+      <button id="btnClear" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        <span id="clearLabel">清空</span>
+      </button>
+      <button id="btnExport" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span id="exportLabel">导出</span>
+      </button>
+      <select id="exportFormat" class="export-select" aria-label="export">
+        <option value="txt">TXT</option>
+        <option value="srt">SRT</option>
+        <option value="json">JSON</option>
+      </select>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnExport" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipExport">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip anchor-right" role="tooltip" id="helpTipExport"></span>
+      </span>
+    </div>
+  </div>
+
+  <!-- —— C. 外观：accent 主题色板选择器（5 套，chip 内联 --swatch-color 预览） —— -->
+  <div class="card" id="cardAppearance">
+    <div class="label-row">
+      <span class="section-label" id="appearanceLabel">外观</span>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnAppearance" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipAppearance">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipAppearance">更换面板强调色：影响开关选中态、滑杆填充、主按钮与命中高亮等控件配色，选择自动保存。</span>
+      </span>
+    </div>
+    <!-- 深浅模式（t29）：独立调色非反色，纯 popup 视觉不进 FORWARD 链路 -->
+    <div class="label-row sub-gap">
+      <span class="section-label" id="colorModeLabel">深浅模式</span>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnColorMode" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipColorMode">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip" role="tooltip" id="helpTipColorMode">切换面板深浅外观：自动（默认）跟随系统的深浅模式实时切换，也可手动固定深色或浅色。浅色为独立调色（非反色）：白卡片、加深强调色，对比度已校准。选择自动保存。</span>
+      </span>
+    </div>
+    <!-- 深浅模式三态：auto（默认，跟随系统 prefers-color-scheme）/ dark / light。
+         body[data-mode] 写的是解析后的实际值，auto 的系统联动见 panel.ts applyColorMode -->
+    <div class="cmode-row" role="radiogroup" aria-labelledby="colorModeLabel">
+      <button type="button" class="cmode active" data-cmode="auto" role="radio" aria-checked="true"><span class="seg-name" data-key="modeAuto">自动</span></button>
+      <button type="button" class="cmode" data-cmode="dark" role="radio" aria-checked="false"><span class="seg-name" data-key="modeDark">深色</span></button>
+      <button type="button" class="cmode" data-cmode="light" role="radio" aria-checked="false"><span class="seg-name" data-key="modeLight">浅色</span></button>
+    </div>
+    <div class="theme-row" role="radiogroup" aria-labelledby="appearanceLabel">      <!-- 坑：内联 --swatch-color 是色卡预览+选中环取色口，必须与 :root/body[data-theme]
+           的 --accent 同值同步——改主题色时两处一起改，否则预览与实际生效色不符 -->
+      <button type="button" class="swatch active" data-theme="cyan" role="radio" aria-checked="true" style="--swatch-color:#4c9ee8;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeCyan">青蓝</span>
+      </button>
+      <button type="button" class="swatch" data-theme="emerald" role="radio" aria-checked="false" style="--swatch-color:#3fae8c;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeEmerald">翡翠绿</span>
+      </button>
+      <button type="button" class="swatch" data-theme="violet" role="radio" aria-checked="false" style="--swatch-color:#9086cf;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeViolet">紫罗兰</span>
+      </button>
+      <button type="button" class="swatch" data-theme="amber" role="radio" aria-checked="false" style="--swatch-color:#cba53f;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeAmber">琥珀金</span>
+      </button>
+      <button type="button" class="swatch" data-theme="rose" role="radio" aria-checked="false" style="--swatch-color:#cd7382;">
+        <span class="chip"></span><span class="swatch-name" data-key="themeRose">玫瑰红</span>
+      </button>
+    </div>
+
+    <div class="label-row sub-gap">
+      <span class="section-label" id="overlayBgLabel">叠层外观</span>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnOverlayBg" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipOverlayBg">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipOverlayBg">字幕叠层的背景样式：毛玻璃=半透明模糊底；纯色=不透明深色底；描边=无底色、仅文字描边。切换即时生效。</span>
+      </span>
+    </div>
+    <!-- 三段式分段控件：字幕叠层背景模式，切换经 PREFS_PATCH 即时下发 content -->
+    <div class="seg-row" role="radiogroup" aria-labelledby="overlayBgLabel">
+      <button type="button" class="seg active" data-bgmode="glass" role="radio" aria-checked="true"><span class="seg-name" data-key="overlayBgGlass">毛玻璃</span></button>
+      <button type="button" class="seg" data-bgmode="solid" role="radio" aria-checked="false"><span class="seg-name" data-key="overlayBgSolid">纯色</span></button>
+      <button type="button" class="seg" data-bgmode="outline" role="radio" aria-checked="false"><span class="seg-name" data-key="overlayBgOutline">描边</span></button>
+    </div>
+
+    <!-- 背景风格四选一（t28）：纯 popup 视觉，不进 FORWARD 链路 -->
+    <div class="label-row sub-gap">
+      <span class="section-label" id="bgSchemeLabel">背景风格</span>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnBgScheme" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipBgScheme">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip flip" role="tooltip" id="helpTipBgScheme">面板底色与卡片明度四选一：曜石黑（默认）/ 纯黑 / 石墨蓝灰 / 暖碳。仅影响本面板外观，选择自动保存。</span>
+      </span>
+    </div>
+    <div class="bsg-row" role="radiogroup" aria-labelledby="bgSchemeLabel">
+      <!-- 坑（t31）：这四个名字随深浅模式联动，不走 [data-key] 静态委托——
+           通用循环会按深色 key 覆盖掉浅色名。文字由 popup.ts updateBgSchemeNames() 统一刷新 -->
+      <button type="button" class="bsg active" data-scheme="obsidian" role="radio" aria-checked="true"><span class="seg-name">曜石黑</span></button>
+      <button type="button" class="bsg" data-scheme="pitch" role="radio" aria-checked="false"><span class="seg-name">纯黑</span></button>
+      <button type="button" class="bsg" data-scheme="graphite" role="radio" aria-checked="false"><span class="seg-name">石墨蓝灰</span></button>
+      <button type="button" class="bsg" data-scheme="ember" role="radio" aria-checked="false"><span class="seg-name">暖碳</span></button>
+    </div>
+
+    <div class="row">
+      <input type="checkbox" id="chkAnim">
+      <label for="chkAnim" id="showAnimations">动效</label>
+      <span class="help-wrap">
+        <button type="button" id="helpBtnAnimations" class="help-btn" aria-label="查看帮助" aria-describedby="helpTipAnimations">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </button>
+        <span class="help-tip" role="tooltip" id="helpTipAnimations">开启后恢复状态灯呼吸与面板入场交错动画。默认关闭；开销可忽略，且系统"减弱动态"设置始终优先。</span>
+      </span>
+    </div>
+  </div>
+
+  <div class="preview" id="textPreview">
+    <div class="current-text" id="readyText">就绪</div>
+  </div>
+
+  <div class="status-bar" id="modelStatus"></div>
+
+  <!-- 子面板遮罩（仅 Web 整页显示，panel.ts 按 IS_EXTENSION 门控）：热词等 .subpanel 在整页里
+       是居中小卡，垫一层灰底压暗页面其余内容、突出焦点。扩展弹窗里 .subpanel 本就 inset:0
+       铺满整窗、遮罩会被完全盖住，因此扩展侧不显示（节点存在但恒 hidden）。 -->
+  <div class="subpanel-backdrop" id="subpanelBackdrop" hidden></div>
+
+  <!-- 热词编辑·窗中窗（子面板浮层）：absolute 盖在弹出窗上，随 .container 定位 -->
+  <div class="subpanel" id="hotwordsPanel" hidden>
+    <div class="subpanel-head">
+      <span class="section-label" id="hotwordsTitle">热词词典</span>
+      <button type="button" id="btnHotwordsClose" class="icon-btn" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <p class="subpanel-hint" id="hotwordsHint"></p>
+    <div class="row subpanel-foot">
+      <span class="model-info" id="hotwordsCount"></span>
+      <button type="button" id="btnHotwordsSave" class="icon-btn" style="margin-left:auto;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        <span id="hotwordsSaveLabel">保存</span>
+      </button>
+    </div>
+    <textarea id="hotwordsInput" rows="8" spellcheck="false"></textarea>
+    <p class="subpanel-hint" id="hotwordsNextRun"></p>
+  </div>
+
+  <!-- 模型引导的遮罩层（纯 Web 版用）。扩展弹窗只有 380px，内置 subpanel 浮层已占满整窗，
+       不需要遮罩；Web 版是整页，加一层遮罩 + 居中大卡才够醒目（实测反馈"看不到那个框"）。
+       默认 hidden；只有宿主声明 modelGuideStyle:'modal' 时面板才会把它显隐。
+       注：它和 asrModelPanel 是兄弟节点，所以遮罩必须在 DOM 上位于面板**之前**
+       （面板 z-index 更高、且必须盖在遮罩上）。 -->
+  <div class="asr-backdrop" id="asrBackdrop" hidden></div>
+
+  <!-- 语音识别模型缺失·窗中窗：nomodel 版安装包点「启动」时引导下载+导入一次 -->
+  <div class="subpanel" id="asrModelPanel" hidden>
+    <div class="subpanel-head">
+      <span class="section-label" id="asrModelTitle">缺少语音识别模型</span>
+      <button type="button" id="btnAsrModelClose" class="icon-btn" aria-label="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <p class="subpanel-hint" id="asrModelHint"></p>
+    <!-- 主操作：一键下载到 IndexedDB -->
+    <button type="button" id="btnAsrModelDownload" class="icon-btn" style="width:100%;justify-content:center;gap:6px;margin:4px 0 2px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span id="asrModelDownloadLabel">一键下载模型</span>
+    </button>
+    <!-- 进度条 -->
+    <div class="asr-progress-wrap" id="asrProgressWrap" hidden>
+      <div class="asr-progress-bar"><div class="asr-progress-fill" id="asrProgressFill"></div></div>
+      <span class="asr-progress-text" id="asrProgressText">0%</span>
+    </div>
+    <!-- 坑：popup 窗口失焦/关闭会直接杀掉进行中的 fetch，下载中途不会落盘、只能重头再来，
+         必须显式提醒用户保持窗口打开 -->
+    <p class="subpanel-hint" id="asrDlWarn" hidden></p>
+    <!-- 备用方案：手动下载链接 + 手动导入 -->
+    <button type="button" class="asr-alt-toggle" id="asrAltToggle">▼ 备用方案：手动下载后导入</button>
+    <div class="asr-alt-links" id="asrAltLinks">
+      <a id="asrModelLinkModelScope" href="https://modelscope.cn/models/hcz1017/easysub-model/resolve/master/sherpa-onnx-wasm-main-asr.data" target="_blank" rel="noopener"></a>
+      <a id="asrModelLinkGithub" href="https://github.com/huchangzhi/easysub/releases" target="_blank" rel="noopener"></a>
+      <a id="asrModelLinkGitee" href="https://gitee.com/huchangzhi/easysub-model/releases" target="_blank" rel="noopener"></a>
+      <button type="button" id="btnAsrModelImport" class="icon-btn" style="width:100%;justify-content:center;gap:6px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M8 11l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span id="asrModelImportLabel">选择已下载的模型文件导入</span>
+      </button>
+    </div>
+    <!-- 模型就绪后的续跑区（纯 Web 版用）。扩展侧下载/导入成功即自动续跑，
+         这里保持 hidden；Web 侧因为系统音频必须在新手势内弹屏幕选择器，
+         "自动续跑"做不到（手势已过期），改成一个显眼的主按钮请用户点一下。 -->
+    <div id="asrReadyRow" hidden>
+      <p class="subpanel-hint" id="asrReadyHint"></p>
+      <button type="button" id="btnAsrModelStartNow" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.5 4.5a.5.5 0 0 1 .75-.433l12 8a.5.5 0 0 1 0 .866l-12 8A.5.5 0 0 1 6.5 20.5v-16z"/></svg>
+        <span id="asrModelStartNowLabel">开始识别</span>
+      </button>
+    </div>
+    <span class="model-info" id="asrModelStatus"></span>
+    <input type="file" id="asrModelPicker" accept=".data,application/octet-stream" style="display:none;">
+  </div>
+
+  <!-- 系统音频不支持·窗中窗：popup 会随点「启动」关闭，行内小字用户看不到，
+       必须用一个需要用户动手关闭的模态层把原因顶到眼前（不引入 notifications 权限） -->
+  <div class="unsup-mask" id="unsupModal" hidden>
+    <div class="unsup-card" role="alertdialog" aria-modal="true" aria-labelledby="unsupTitle">
+      <div class="unsup-head">
+        <svg class="unsup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span id="unsupTitle"></span>
+      </div>
+      <p class="unsup-body" id="unsupBody"></p>
+      <div class="unsup-actions">
+        <button type="button" class="unsup-btn primary" id="unsupSwitch"></button>
+        <button type="button" class="unsup-btn" id="unsupClose"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 系统音频·选择器前置确认框（两端共用）：浏览器限制 getDisplayMedia 不能只授权音频，
+       必须画面+音频一起勾。在弹选择器之前把这件事讲清楚（尤其"画面流授权后立刻销毁"），
+       免得用户因为"要共享屏幕"而担心隐私直接放弃。点「打开选择器」才继续启动流程。 -->
+  <div class="unsup-mask" id="sysPickModal" hidden>
+    <div class="unsup-card pick-confirm" role="alertdialog" aria-modal="true" aria-labelledby="sysPickTitle">
+      <div class="unsup-head">
+        <svg class="unsup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <span id="sysPickTitle"></span>
+      </div>
+      <p class="unsup-body" id="sysPickBody"></p>
+      <div class="unsup-actions">
+        <button type="button" class="unsup-btn primary" id="sysPickConfirm"></button>
+        <button type="button" class="unsup-btn" id="sysPickCancel"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 浏览器兼容性自检（首次启动弹一次，两端共用）：UA 必须 Chrome/Edge，关键 API 与
+       静态资源响应头按「必须 / 重要 / 建议」三档检测并汇总为 0-100 评分；不达标时给出
+       Chrome / Edge 官方下载链接（Chrome 按界面语言选 google.cn / google.com）。
+       检测与渲染逻辑全部在 src/compat.ts，这里只有静态骨架。 -->
+  <div class="unsup-mask" id="compatModal" hidden>
+    <div class="unsup-card compat" role="dialog" aria-modal="true" aria-labelledby="compatTitle">
+      <div class="unsup-head">
+        <svg class="unsup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+        <span id="compatTitle"></span>
+        <span class="compat-score" id="compatScore"></span>
+        <!-- 语言切换：遮罩挡住了面板 Hero 的 btnLang，首次启动的用户可能正是英文系统
+             看中文弹窗——必须能在弹窗内就地切换。点击委托给面板的 btnLang（同一套
+             setLang+applyLang 逻辑），applyLang 末尾的钩子会把本弹窗文案一并刷新。 -->
+        <button type="button" id="compatLang" class="icon-btn lang-switch"></button>
+      </div>
+      <p class="unsup-body" id="compatVerdict"></p>
+      <div class="compat-list" id="compatList"></div>
+      <div class="compat-dl" id="compatDl" hidden>
+        <span id="compatDlLabel"></span>
+        <a id="compatDlChromeCn" target="_blank" rel="noopener"></a>
+        <a id="compatDlChromeIntl" target="_blank" rel="noopener"></a>
+        <a id="compatDlEdge" target="_blank" rel="noopener"></a>
+      </div>
+      <div class="unsup-actions">
+        <button type="button" class="unsup-btn primary" id="compatOk"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="disclaimer" id="disclaimer">字幕由模型识别，不保证准确</div>
+</div>

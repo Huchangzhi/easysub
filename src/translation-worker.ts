@@ -99,7 +99,10 @@ async function getPipeline(modelId: string): Promise<LoadResult> {
   if (!keys.some(k => k.includes('opus-mt'))) {
     lastNoModelDebug = { keyCount: keys.length, sample: keys.slice(0, 6) };
     console.log('[translation-worker] no-model', JSON.stringify({ modelId, ...lastNoModelDebug }));
-    return (loadCache[modelId] = { missing: true });
+    // 坑：缺模型**不记忆化**。用户在会话中途导入模型是正常操作，记忆化会让同一个
+    // worker 永远报 no-model（只能重启会话）。每次重查一遍 IndexedDB 键表只要几毫秒；
+    // 真正昂贵的 pipeline 加载成功后仍然记忆化，不受影响。
+    return { missing: true };
   }
   const t0 = Date.now();
   try {
@@ -108,6 +111,8 @@ async function getPipeline(modelId: string): Promise<LoadResult> {
     return (loadCache[modelId] = { pipe });
   } catch (e: any) {
     console.log('[translation-worker] load-fail', modelId, (Date.now() - t0) + 'ms', e?.message || String(e));
+    // 加载失败（文件在但坏了/不兼容）保持记忆化：不记忆化的话每句都会重跑一遍
+    // 216MB 的模型加载，直接拖垮机器。修好模型后由 RESET_MODEL_CACHE 解除。
     return (loadCache[modelId] = { error: e?.message || String(e) });
   }
 }
@@ -137,6 +142,13 @@ let msgId = 0;
 
 self.onmessage = (e: MessageEvent) => {
   const msg = e.data || {};
+  // 模型（重新）导入后由宿主转发：清掉失败/缺模的加载缓存，让下一句直接用上新模型，
+  // 正在运行的会话无需重启。成功的 pipeline 缓存也可安全清除——下次按需重载。
+  if (msg.type === 'RESET_MODEL_CACHE') {
+    for (const k of Object.keys(loadCache)) delete loadCache[k];
+    setupError = null;
+    return;
+  }
   if (msg.type !== 'TRANSLATE') return;
   if (msg.wasmPaths) wasmPaths = msg.wasmPaths;
   const id = ++msgId;

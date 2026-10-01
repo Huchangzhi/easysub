@@ -1,0 +1,47 @@
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      font: 500 12px/1.55 system-ui, -apple-system, sans-serif;
+      /* 坑：chrome.windows 弹窗没有 OS 级 alpha 透明，transparent 的 body 只会露出
+         白色窗体。整体铺深色底：既避免加载瞬间闪白，也保证置顶后最小化的原窗口
+         （内容已搬进画中画）不再是"白色废窗" */
+      background: #0b0b14;
+      color: rgba(255, 255, 255, 0.92);
+      overflow: hidden;
+      user-select: none;
+    }
+    /* 字幕主体由共享 overlay.ts 以 fill 模式铺满整个窗口（画中画内同样铺满），
+       拖边缩放窗口即缩放字幕区域——"字幕窗口与悬浮窗共同调节大小"。
+       pipRoot 只是包裹壳，PiP 置顶时整壳搬进画中画文档 */
+    #pipRoot { width: 100vw; height: 100vh; }
+    /* 工具条：跟随 pipRoot 一起搬进画中画（置顶后原窗口已最小化，控制权在画中画里）。
+       position:fixed 相对视口；z-index 与叠层同级且后声明（同层后胜），浮在字幕上方 */
+    .toolbar {
+      position: fixed;
+      top: 7px;
+      right: 9px;
+      z-index: 2147483647;
+      display: flex;
+      gap: 5px;
+      opacity: 0.55;
+      transition: opacity 160ms ease;
+    }
+    #pipRoot:hover .toolbar { opacity: 1; }
+    .toolbar button {
+      width: 26px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.08);
+      color: rgba(255, 255, 255, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      cursor: pointer;
+      font: 600 11px/1 system-ui, sans-serif;
+    }
+    .toolbar button:hover { background: rgba(255, 255, 255, 0.16); }
+    .toolbar button:disabled { opacity: 0.35; cursor: default; }
+    .toolbar button.pinned { background: #4c9ee8; border-color: transparent; color: #fff; }
+    [hidden] { display: none !important; }
+  
