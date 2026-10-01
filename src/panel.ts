@@ -337,9 +337,11 @@ async function applyLang() {
   buildTranslateNotice();
   refreshTranslateStatus();
   updateBgSchemeNames(); // 背景方案名按当前模式+语言刷新（t31，见函数内坑注）
-  // Hero 大状态词也要跟随语言刷新（依据最近一次状态与是否启动过）
-  statusWordEl.textContent = tSync(currentLang,
-    lastStatus === 'Running' ? 'stateRunning' : (hasStarted ? 'stateStopped' : 'stateReady'));
+  // Hero 大状态词也要跟随语言刷新（依据最近一次状态与是否启动过；
+  // 模型加载中则刷新加载文案本身——见 setHeroLoading）
+  statusWordEl.textContent = heroLoadingKey ? tSync(currentLang, heroLoadingKey)
+    : tSync(currentLang,
+      lastStatus === 'Running' ? 'stateRunning' : (hasStarted ? 'stateStopped' : 'stateReady'));
   btnLang.textContent = tr('langSwitch');
   updateLockUI();
   renderTranscript();
@@ -850,6 +852,8 @@ function stopTimer(resetDisplay: boolean) {
 }
 
 function setStatus(status: string, startedAt?: number) {
+  // 任何会话状态推进（Running/Stopped）都终结"模型加载中"的临时态（见 setHeroLoading）
+  heroLoadingKey = null;
   statusDot.className = 'status-dot ' + status;
   btnStart.disabled = status === 'Running';
   btnStop.disabled = status === 'Stopped';
@@ -872,6 +876,23 @@ function setStatus(status: string, startedAt?: number) {
     if (chkWaveform.checked) drawWave();
     statusWordEl.textContent = tSync(currentLang, hasStarted ? 'stateStopped' : 'stateReady');
   }
+}
+
+// —— 模型加载中的可见反馈（用户实测反馈「点了开始毫无反应，页面还是已停止」）——
+// 引擎的 STATUS_TEXT 'loadingModel' 此前只落状态栏一行小字，Hero 大状态词仍是
+// 「待命/已停止」、状态灯仍是红点，模型加载的几十秒看起来就像卡死。
+// 这里把加载态顶到大状态词：琥珀点 + 加载文案（Web 版附"勿切出页面"——切出后主线程
+// 被浏览器节流，加载明显变慢）。任何 STATUS_CHANGED 都经 setStatus 复位回常规两态。
+let heroLoadingKey: string | null = null;
+function setHeroLoading(key: string | null) {
+  heroLoadingKey = key;
+  if (!key) return;
+  // 加载 ≠ 运行：摘掉 setStatus('Running') 刚盖上的绿色描边（乐观盖章），
+  // 否则边框说"运行中"、大状态词说"加载中"，视觉自相矛盾
+  hero.classList.remove('Running');
+  statusDot.className = 'status-dot Loading';
+  statusWordEl.textContent = tSync(currentLang, key);
+  log(tSync(currentLang, key));
 }
 
 function log(msg: string) {
@@ -1026,6 +1047,13 @@ async function doStart(): Promise<void> {
     showSysPickModal();
     return;
   }
+  // 加载反馈**从这里就亮起**，早于任何加载/探测动作（用户实测「卡住直到启动、没有任何提示」）。
+  // 原因：点「开始」到引擎发 STATUS_TEXT('loadingModel') 之间隔着一段完全静默的窗口——
+  // Web 版 prepareStart 里先 HEAD 探测包内模型 + 查 IndexedDB，然后才弹屏幕选择器
+  // （弱网下光探测就要数秒）；扩展侧 START 之后还要建 offscreen 文档、等端口握手。
+  // 这一整段此前 Hero 停在「已停止/识别中」纹丝不动。引擎稍后的 STATUS_TEXT 只是再确认；
+  // 下方每条早退路径都必须经 setStatus('Stopped') 把它清掉（现状已满足，见各路径）。
+  setHeroLoading(!IS_EXTENSION ? 'loadingModelWeb' : 'loadingModel');
   // 坑（纯 Web 版）：宿主前置动作必须在**本函数最前面**、任何 await 之前发起。
   // getDisplayMedia / window.open 都要求瞬时用户激活，而下面的 ensureAsrModel()
   // 至少要跨一个 fetch，等它返回时手势早已失效，浏览器会直接拒绝采集。
@@ -1074,8 +1102,9 @@ async function doStart(): Promise<void> {
     setStatus('Stopped');
     return;
   }
-  // nomodel 版门卫：包内无 .data 且未导入过 → 弹窗中窗引导，导入成功自动继续本次启动
-  if (!(await ensureAsrModel())) { releasePreStream(); pickConfirmPassed = false; return; }
+  // nomodel 版门卫：包内无 .data 且未导入过 → 弹窗中窗引导，导入成功自动继续本次启动。
+  // 走到 false（用户关掉引导卡）说明本次启动夭折：清掉 doStart 开头亮起的加载态
+  if (!(await ensureAsrModel())) { releasePreStream(); pickConfirmPassed = false; setStatus('Stopped'); return; }
   // 坑：宿主明确告知"这次手势已被模型流程吃掉"（纯 Web 版首次安装模型时必然如此：
   // 下载 412MB 耗时以分钟计，用户激活早已过期，此时再去 getDisplayMedia 必被拒绝）。
   // 不装模作样地继续启动，而是走"装好后请用户再点一次"的显式流程：
@@ -1118,10 +1147,17 @@ async function doStart(): Promise<void> {
       ...(hostExtras || {}),
     }).catch(() => {});
     setStatus('Running');
+    // 坑（用户实测「加载提示卡住显示不出来」）：模型加载真正开始于宿主侧——扩展是
+    // offscreen 文档一建就预热，Web 是引擎收到 START 就开等 wasm；而引擎的
+    // STATUS_TEXT('loadingModel') 要等 INIT 穿过"建文档/端口握手"才发得出来，那段窗口里
+    // Hero 停在乐观盖章的「识别中」。加载态必须在发送 START 的此刻就地亮出（必须排在
+    // setStatus('Running') 之后——setStatus 会清掉加载态），引擎稍后的同名 STATUS_TEXT 只是再确认。
+    setHeroLoading(!IS_EXTENSION ? 'loadingModelWeb' : 'loadingModel');
     return;
   }
   const tabId = await getActiveTabId();
-  if (!tabId) { releasePreStream(); log(tSync(currentLang, 'noActiveTab')); return; }
+  // 没有活动标签页 = 本次启动夭折：清掉 doStart 开头亮起的加载态
+  if (!tabId) { releasePreStream(); setStatus('Stopped'); log(tSync(currentLang, 'noActiveTab')); return; }
 
   sendToHost({
     type: 'START_RECOGNITION',
@@ -1132,6 +1168,8 @@ async function doStart(): Promise<void> {
     ...(hostExtras || {}),
   }).catch(() => {});
   setStatus('Running');
+  // 同上：tab 音源的加载态也在发送 START 的此刻亮出，不等引擎的 STATUS_TEXT
+  setHeroLoading(!IS_EXTENSION ? 'loadingModelWeb' : 'loadingModel');
 }
 
 export function triggerStart(): void { void doStart(); }
@@ -1845,7 +1883,13 @@ onMessageFromHost((msg) => {
     case 'STATUS_TEXT':
       // 状态文案（正在加载模型 / 正在等待音频 / 请选择共享屏幕）落到状态栏，
       // 不再走 TEXT_CHANGED 混进"当前字幕"预览区——旧实现会把这类状态显示成一句字幕。
-      log(msg.key ? tSync(currentLang, msg.key) : '');
+      if (msg.key === 'loadingModel') {
+        // 加载态顶到 Hero 大状态词；Web 版换用带"勿切出页面"叮嘱的变体文案
+        setHeroLoading(!IS_EXTENSION ? 'loadingModelWeb' : 'loadingModel');
+      } else {
+        if (!msg.key) setHeroLoading(null);
+        log(msg.key ? tSync(currentLang, msg.key) : '');
+      }
       break;
     case 'SENTENCE_DONE': {
       const el = document.createElement('div');

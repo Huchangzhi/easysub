@@ -201,6 +201,9 @@ body {
 /* 去 AI 味默认静态：绿点实心+状态词变绿已足够表意；呼吸动效由下方 body.anim 门控交还用户 */
 .status-dot.Running { background: var(--green); }
 .status-dot.Stopped { background: var(--red); }
+/* 模型加载中（STATUS_TEXT 'loadingModel' → panel.ts setHeroLoading）：琥珀点，
+   任何 STATUS_CHANGED（Running/Stopped）都会经 setStatus 复位回常规两态 */
+.status-dot.Loading { background: var(--orange); }
 
 /* —— 动效开关（t28，prefs.animationsEnabled 默认关）——
    坑：层级纪律——body.anim 类只是用户授权，系统 prefers-reduced-motion 优先级永远

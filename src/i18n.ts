@@ -18,6 +18,8 @@ const strings: Record<string, Record<string, string>> = {
     ready: '就绪',
     waiting: '正在等待音频',
     loadingModel: '正在加载模型',
+    // Web 版加载提示的变体：切出页面后主线程被浏览器节流，加载会明显变慢，文案里直接叮嘱
+    loadingModelWeb: '正在加载模型，请勿切换出此页面',
     permissionTitle: '需要麦克风权限',
     permissionDesc: '易字幕 需要麦克风访问权限才能进行语音识别',
     permissionGrant: '授权麦克风',
@@ -275,6 +277,7 @@ const strings: Record<string, Record<string, string>> = {
     ready: 'Ready',
     waiting: 'Waiting for audio',
     loadingModel: 'Loading model',
+    loadingModelWeb: 'Loading model — please keep this page in the foreground',
     permissionTitle: 'Microphone Access Required',
     permissionDesc: 'EasySub needs microphone access for speech recognition',
     permissionGrant: 'Grant Microphone',
