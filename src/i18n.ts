@@ -261,6 +261,7 @@ const strings: Record<string, Record<string, string>> = {
     compatDlChromeCn: '下载 Chrome（中国站）',
     compatDlChromeIntl: '下载 Chrome（国际站）',
     compatDlEdge: '下载 Edge',
+    compatRecheck: '重新检测',
     compatOk: '知道了',
   },
   en: {
@@ -497,6 +498,7 @@ const strings: Record<string, Record<string, string>> = {
     compatDlChromeCn: 'Get Chrome (China site)',
     compatDlChromeIntl: 'Get Chrome (International site)',
     compatDlEdge: 'Get Edge',
+    compatRecheck: 'Re-check',
     compatOk: 'Got it',
   },
 };

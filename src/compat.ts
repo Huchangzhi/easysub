@@ -121,25 +121,31 @@ export function initCompatCheck(): void {
 }
 
 async function runCompatCheck(): Promise<void> {
-  // 同一浏览器只弹一次：UA 记在 storage。读失败/写失败都不拦提示（宁可多弹不可漏弹）。
-  // 命中记忆就提前返回，连 HEAD 探测都省掉（每次打开面板都探测就浪费了）。
+  // 「同一浏览器不再显示」的记忆**只在用户点「知道了」时落盘**（见 fillCompatModal 的
+  // ok.onclick），这里只读不写。原因（用户实测）：Web 版首次访问会触发 coi-serviceworker
+  // 的跨源隔离自动刷新，弹窗刚亮就被刷掉——若在这里就落盘，用户永远见不到检测结果，
+  // 且按 UA 记忆再也不弹。读取提前到探测之前，命中记忆连 HEAD 请求都省掉。
   try {
     const seen = (await storage.get(SEEN_KEY))[SEEN_KEY];
     if (seen === navigator.userAgent) return;
-    await storage.set({ [SEEN_KEY]: navigator.userAgent });
   } catch { /* 存储异常：照常提示 */ }
+  showCompatModal(await detectCompat());
+}
+
+// 执行一轮完整检测（同步 API 检查 + 异步 HEAD 响应头探测）并评分。
+// 抽成独立函数：「重新检测」按钮复用同一条路径，保证与首次检测口径完全一致。
+async function detectCompat(): Promise<CompatReport> {
   const { name, family, major } = detectBrowser();
   const checks = buildChecks(family, major);
   const headersOk = await probeAssetHeaders();
   checks.find(c => c.id === 'Headers')!.ok = headersOk;
-  const report: CompatReport = {
+  return {
     browser: name,
     family,
     score: scoreReport(family, checks),
     checks,
     uaOk: family === 'chrome' || family === 'edge',
   };
-  showCompatModal(report);
 }
 
 // 最近一次检测结果 + 当前语言：语言切换时（面板 applyLang 回调 __easysubCompatRefresh）
@@ -208,7 +214,28 @@ function fillCompatModal(report: CompatReport, lang: string): void {
   }
   const ok = document.getElementById('compatOk')!;
   ok.textContent = tSync(lang, 'compatOk');
-  ok.onclick = () => { modal.hidden = true; };
+  // 「知道了」= 用户确认读完 → 落盘"该浏览器已看过"，之后不再弹。
+  // Esc / 点遮罩关闭**不**落盘：下次启动还会再弹（写失败不阻断关闭）。
+  ok.onclick = () => {
+    modal.hidden = true;
+    storage.set({ [SEEN_KEY]: navigator.userAgent }).catch(() => {});
+  };
+  // 「重新检测」：重跑一轮完整检测并原地刷新结果（弹窗保持打开，语言与滚动位置不动）
+  const recheck = document.getElementById('compatRecheck') as HTMLButtonElement | null;
+  if (recheck) {
+    recheck.textContent = tSync(lang, 'compatRecheck');
+    recheck.onclick = async () => {
+      recheck.disabled = true;
+      try {
+        lastReport = await detectCompat();
+        fillCompatModal(lastReport, compatLang);
+      } finally {
+        // fillCompatModal 重绑了 onclick 并重写文案，按钮引用仍在——恢复可用态
+        const btn = document.getElementById('compatRecheck') as HTMLButtonElement | null;
+        if (btn) btn.disabled = false;
+      }
+    };
+  }
 }
 
 function showCompatModal(report: CompatReport): void {
