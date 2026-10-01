@@ -102,6 +102,27 @@ const unsupTitle = $('unsupTitle');
 const unsupBody = $('unsupBody');
 const unsupSwitch = $('unsupSwitch') as HTMLButtonElement;
 const unsupClose = $('unsupClose') as HTMLButtonElement;
+// —— 麦克风启动失败·模态（两端共用）——
+// getUserMedia 被浏览器直接拒绝时（设备不存在/系统隐私禁用/曾被拒绝）授权框根本
+// 不会出现，会话随即收敛——只给状态栏一行小字，用户看到的就是"没弹框就闪退"。
+// 模态把具体原因（DOMException 名映射的排查指引，见 mic-capture.ts micErrorText）顶到眼前。
+const micErrModal = $('micErrModal') as HTMLDivElement;
+const micErrBodyEl = $('micErrBody');
+const micErrOk = $('micErrOk') as HTMLButtonElement;
+let micErrBody = '';
+function fillMicErrorModalText() {
+  $('micErrTitleEl').textContent = tSync(currentLang, 'micErrTitle');
+  micErrBodyEl.textContent = micErrBody;
+  micErrOk.textContent = tSync(currentLang, 'unsupGotIt');
+}
+function showMicErrorModal(body: string) {
+  micErrBody = body;
+  fillMicErrorModalText();
+  micErrModal.hidden = false;
+  micErrOk.focus();
+}
+micErrOk.onclick = () => { micErrModal.hidden = true; };
+micErrModal.onclick = (e) => { if (e.target === micErrModal) micErrModal.hidden = true; };
 // —— 系统音频·选择器前置确认框（两端共用）——
 const sysPickModal = $('sysPickModal') as HTMLDivElement;
 const sysPickTitle = $('sysPickTitle');
@@ -226,6 +247,8 @@ async function applyLang() {
   if (!unsupModal.hidden) fillUnsupportedModalText();
   // 选择器前置确认框同理：开着时切语言不能停在旧语言
   if (!sysPickModal.hidden) fillSysPickModalText();
+  // 麦克风失败模态同理
+  if (!micErrModal.hidden) fillMicErrorModalText();
   $('showSubtitles').textContent = tr('showSubtitles');
   $('fontLabel').textContent = tr('font');
   $('modelInfo').textContent = tr('modelInfo');
@@ -1970,6 +1993,8 @@ onMessageFromHost((msg) => {
     case 'ERROR':
       // 坑：errorPrefix 的 {m} 是占位符，须手动 replace（与 searchHits 同一套约定）
       log(tSync(currentLang, 'errorPrefix').replace('{m}', String(msg.message)));
+      // 麦克风启动失败升级为模态：授权框没出现就闪退时，这是用户唯一读得到原因的地方
+      if (msg.micFailure) showMicErrorModal(String(msg.message || ''));
       setStatus('Stopped');
       break;
     case 'LOCK_CHANGED':

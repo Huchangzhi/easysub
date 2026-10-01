@@ -6,6 +6,18 @@
 //   - Web 侧页面本身就是可见窗口，可直接采。
 // 两者"谁来调 getUserMedia"不同，但"怎么采、怎么出块"完全一样，故只抽这一层。
 import { resolveUrl } from './platform';
+import { tSync } from './i18n';
+
+// getUserMedia 失败名 → 用户可读文案（两端共用）。NotAllowedError 之外要特别留意
+// NotFoundError：系统里没有可用麦克风（设备未接 / Windows 隐私设置禁用）时 Chrome
+// **不弹授权框直接拒**——用户看到的"没弹框就闪退"多半是它。
+export function micErrorText(lang: string, name: string, message: string): string {
+  if (name === 'NotAllowedError') return tSync(lang, 'micDenied');
+  if (name === 'NotFoundError') return tSync(lang, 'micNotFound');
+  if (name === 'NotReadableError' || name === 'AbortError') return tSync(lang, 'micNotReadable');
+  if (name === 'TrackEnded') return tSync(lang, 'micTrackEnded');
+  return `${tSync(lang, 'micFailFallback')}: ${message || ''}`.trim();
+}
 
 // 等 AudioContext.resume() 的上限（单次）与总时长：无用户激活时它可能一直挂着
 // （既不成功也不失败），无限等待会让 start() 永不返回、宿主一直以为"正在启动采集"。
@@ -40,6 +52,14 @@ export class MicCapture {
   constructor(opts: MicCaptureOptions) {
     this.opts = opts;
   }  get isActive() { return this.active; }
+
+  // 失败上报统一出口：面板侧的模态/状态栏可能被用户错过（popup 随焦点关闭、整页被
+  // 浮窗盖住），控制台是排障的可靠出口——错误名（NotAllowedError/NotFoundError…）
+  // 直接决定"为什么没弹授权框"，必须留痕。
+  private fail(name: string, message: string) {
+    console.log('[EasySub] 麦克风采集失败:', name, message);
+    this.opts.onError(name, message);
+  }
 
   stop() {
     this.gen++;
@@ -79,7 +99,7 @@ export class MicCapture {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e: any) {
       if (stale()) return; // 已被外部停止：会话自有收敛路径，不再上报错误
-      this.opts.onError(e?.name || '', e?.message || String(e));
+      this.fail(e?.name || '', e?.message || String(e));
       return;
     }
     if (stale()) { abandon(); return; }
@@ -119,14 +139,14 @@ export class MicCapture {
       track?.addEventListener('ended', () => {
         if (!this.active) return;
         this.stop();
-        this.opts.onError('TrackEnded', '麦克风设备已断开');
+        this.fail('TrackEnded', '麦克风设备已断开');
       });
       // 坑：设备在 getUserMedia 与 addModule 之间的 await 里被拔掉时，ended 事件早已
       // 发出、监听器是刚挂上的，永远收不到——会话会停在"采集正常"的假象里，永远没有音频。
       // 提交后补一次状态核对，把这种"装完就已死"的采集如实报成设备断开。
       if (track && track.readyState === 'ended') {
         this.stop();
-        this.opts.onError('TrackEnded', '麦克风设备已断开');
+        this.fail('TrackEnded', '麦克风设备已断开');
         return;
       }
       const actx = ctx;
@@ -138,7 +158,7 @@ export class MicCapture {
         // 跑起来之后再被挂起（休眠/设备切换）才是真故障——没有音频进管道，界面却停在运行中。
         if (everRunning) {
           this.stop();
-          this.opts.onError('AudioContextSuspended', `麦克风音频输出已挂起（${actx.state}）`);
+          this.fail('AudioContextSuspended', `麦克风音频输出已挂起（${actx.state}）`);
         }
       };
       // 上下文可能因自动播放策略以 suspended 启动（页面还没有用户激活，或激活已被权限
@@ -161,14 +181,14 @@ export class MicCapture {
         // 音频上下文起不来 = 渲染图不推进 = 一点音频都收不到。如实上报并收敛，
         // 不要留下"界面在跑、其实没有声音进来"的幽灵会话。
         this.stop();
-        this.opts.onError('AudioContextSuspended', `麦克风音频未能启动（AudioContext ${ctxState()}）`);
+        this.fail('AudioContextSuspended', `麦克风音频未能启动（AudioContext ${ctxState()}）`);
         return;
       }
       everRunning = true;
     } catch (e: any) {
       abandon();
       if (stale()) return;
-      this.opts.onError(e?.name || '', e?.message || String(e));
+      this.fail(e?.name || '', e?.message || String(e));
     }
   }
 }

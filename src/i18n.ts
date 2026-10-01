@@ -214,7 +214,13 @@ const strings: Record<string, Record<string, string>> = {
     sourceMic: '麦克风',
     sourceHintMic: '识别麦克风采集到的声音。首次开始识别时会在悬浮字幕窗上弹出 Chrome 授权框（可在其中选择设备，浏览器会记住），字幕显示在悬浮窗。',
     micDenied: '未获得麦克风权限或设备不可用，识别未开始',
+    // NotFoundError（系统无可用麦克风 / Windows 隐私设置禁用）时 Chrome 不弹授权框直接拒，
+    // 必须给出可操作的排查指引，否则用户看到的只是"没弹框就闪退"
+    micNotFound: '未检测到麦克风设备，识别未开始。请确认麦克风已连接并在系统里可用；若仍不行，检查系统隐私设置是否允许应用访问麦克风（Windows：设置 → 隐私和安全性 → 麦克风）。',
+    micNotReadable: '麦克风被其它应用占用或无法读取，识别未开始。请关闭占用麦克风的软件后重试。',
     micTrackEnded: '麦克风设备已断开，识别已停止',
+    // 麦克风启动失败的模态标题（面板把这类错误从状态栏一行小字升级为模态）
+    micErrTitle: '无法使用麦克风',
     micFailFallback: '麦克风采集失败，识别已停止',
     startFailed: '启动失败: {m}',
     micGrantTip: '若未弹出授权框，请在悬浮字幕窗的地址栏左侧图标里允许麦克风后重试。',
@@ -450,7 +456,10 @@ const strings: Record<string, Record<string, string>> = {
     sourceMic: 'Microphone',
     sourceHintMic: 'Transcribes what the microphone hears. On the first start, Chrome\'s permission prompt appears on the floating subtitle window (pick your device there — the browser remembers it); subtitles show in the floating window.',
     micDenied: 'Microphone permission denied or device unavailable — recognition not started',
+    micNotFound: 'No microphone device detected — recognition not started. Make sure a mic is connected and usable; if it still fails, check that the OS privacy settings allow apps to access the microphone (Windows: Settings → Privacy & security → Microphone).',
+    micNotReadable: 'The microphone is occupied by another app or cannot be read — recognition not started. Close apps using the microphone and retry.',
     micTrackEnded: 'Microphone device disconnected — recognition stopped',
+    micErrTitle: 'Microphone unavailable',
     micFailFallback: 'Microphone capture failed — recognition stopped',
     startFailed: 'Start failed: {m}',
     micGrantTip: 'If no prompt appeared, allow the microphone from the icon at the left of the floating window\'s address bar, then retry.',

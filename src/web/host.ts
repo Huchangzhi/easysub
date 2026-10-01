@@ -16,7 +16,7 @@
 //   START 前置校验 / 代次作废 / 结束即关显示端 / 关显示端即结束会话 / 锁态回源 storage，
 //   少任何一条都会表现成"看起来一样、用起来不一样"（用户已验证过的那些 bug）。
 import { AsrEngine } from '../asr-engine';
-import { MicCapture } from '../mic-capture';
+import { MicCapture, micErrorText } from '../mic-capture';
 import { emitToPanel, onHostMessage, resolveUrl, storage } from '../platform';
 import { tSync } from '../i18n';
 import { appendTranscript, attachTranscriptTranslation } from '../transcript-store';
@@ -237,14 +237,12 @@ async function startSession(msg: any) {
       pushMs: WEB_PUSH_MS,
       onChunk: (f32, sampleRate) => getEngine().feedMicChunk(f32, sampleRate),
       onError: (name, error) => {
-        // 文案走 i18n（双语），与扩展悬浮窗的 MIC_RESULT 分支同一套键
+        // 文案走 micErrorText（与扩展 bg 的 MIC_RESULT 分支同一套键）；
+        // micFailure 标记让面板把这类启动失败升级为模态（状态栏一行小字会被闪退冲掉）
         emitToPanel({
           type: 'ERROR',
-          message: name === 'NotAllowedError'
-            ? tSync(msgLang, 'micDenied')
-            : name === 'TrackEnded'
-              ? tSync(msgLang, 'micTrackEnded')
-              : `${tSync(msgLang, 'micFailFallback')} ${error || ''}`.trim(),
+          message: micErrorText(msgLang, name, error || ''),
+          micFailure: true,
         });
         stopSession();
       },

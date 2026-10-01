@@ -500,6 +500,22 @@
     </div>
   </div>
 
+  <!-- 麦克风启动失败·模态（两端共用）：getUserMedia 被浏览器直接拒绝时（无设备 /
+       系统隐私禁用 / 曾被拒绝）授权框根本不会出现、会话随即收敛，只靠状态栏一行小字
+       用户看到的就是"没弹框就闪退"。模态把 micErrorText 映射的具体排查指引顶到眼前。 -->
+  <div class="unsup-mask" id="micErrModal" hidden>
+    <div class="unsup-card" role="alertdialog" aria-modal="true" aria-labelledby="micErrTitleEl">
+      <div class="unsup-head">
+        <svg class="unsup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+        <span id="micErrTitleEl"></span>
+      </div>
+      <p class="unsup-body" id="micErrBody"></p>
+      <div class="unsup-actions">
+        <button type="button" class="unsup-btn primary" id="micErrOk"></button>
+      </div>
+    </div>
+  </div>
+
   <!-- 浏览器兼容性自检（首次启动弹一次，两端共用）：UA 必须 Chrome/Edge，关键 API 与
        静态资源响应头按「必须 / 重要 / 建议」三档检测并汇总为 0-100 评分；不达标时给出
        Chrome / Edge 官方下载链接（Chrome 按界面语言选 google.cn / google.com）。

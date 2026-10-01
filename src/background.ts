@@ -178,14 +178,20 @@ chrome.runtime.onConnect.addListener((port) => {
         return;
       }
       if (m?.type === 'MIC_RESULT' && m.ok !== true) {
-        // 文案走 i18n（双语）：权限被拒与其它失败分开表述，前者额外给出补救入口
+        // 文案走 i18n（双语）：权限被拒 / 无设备（系统禁用时 Chrome 不弹授权框直接拒，
+        // NotFoundError 单列给排查指引）/ 被占用 / 其它失败分开表述；
+        // micFailure 标记让面板把这类启动失败升级为模态（状态栏一行小字不够醒目）
         void (async () => {
           const msg = m.name === 'NotAllowedError'
             ? `${await t('micDenied')} ${await t('micGrantTip')}`
-            : m.name === 'TrackEnded'
-              ? await t('micTrackEnded')
-              : `${await t('micFailFallback')}: ${m.error || ''}`.trim();
-          sendToPopup({ type: 'ERROR', message: msg });
+            : m.name === 'NotFoundError'
+              ? await t('micNotFound')
+              : m.name === 'NotReadableError' || m.name === 'AbortError'
+                ? await t('micNotReadable')
+                : m.name === 'TrackEnded'
+                  ? await t('micTrackEnded')
+                  : `${await t('micFailFallback')}: ${m.error || ''}`.trim();
+          sendToPopup({ type: 'ERROR', message: msg, micFailure: true });
         })();
         cleanupAll();
       }
