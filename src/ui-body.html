@@ -505,12 +505,17 @@
         <svg class="unsup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
         <span id="compatTitle"></span>
         <span class="compat-score" id="compatScore"></span>
+        <!-- 语言切换：遮罩挡住了面板 Hero 的 btnLang，首次启动的用户可能正是英文系统
+             看中文弹窗——必须能在弹窗内就地切换。点击委托给面板的 btnLang（同一套
+             setLang+applyLang 逻辑），applyLang 末尾的钩子会把本弹窗文案一并刷新。 -->
+        <button type="button" id="compatLang" class="icon-btn lang-switch"></button>
       </div>
       <p class="unsup-body" id="compatVerdict"></p>
       <div class="compat-list" id="compatList"></div>
       <div class="compat-dl" id="compatDl" hidden>
         <span id="compatDlLabel"></span>
-        <a id="compatDlChrome" target="_blank" rel="noopener"></a>
+        <a id="compatDlChromeCn" target="_blank" rel="noopener"></a>
+        <a id="compatDlChromeIntl" target="_blank" rel="noopener"></a>
         <a id="compatDlEdge" target="_blank" rel="noopener"></a>
       </div>
       <div class="unsup-actions">

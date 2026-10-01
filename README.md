@@ -189,7 +189,7 @@ add_header Cross-Origin-Embedder-Policy require-corp;
 3. **改共享文件 = 同时改了两端**：消息分支、`ui-body.html` 的元素 id、i18n 键都是
    两端共用的，删除或改名前先确认另一端没有引用。扩展侧的回归基准是 `dist/` 产物与
    master 等价：manifest 逐字节相同、popup 的全部元素 id 保留、原有消息协议不删不改。
-4. **i18n 中英成对**：`src/i18n.ts` 的 zh 与 en 键位必须一一对应（目前各 222 键），
+4. **i18n 中英成对**：`src/i18n.ts` 的 zh 与 en 键位必须一一对应（目前各 223 键），
    漏掉一侧，另一语言会直接显示键名。
 5. **音频出块模式别混**（见「数据流」）：扩展 offscreen 用 **pull**（延迟指示的测量
    口径依赖"发 flush → 收回包"的因果关系）；可能被最小化或遮挡的页面（Web 面板、

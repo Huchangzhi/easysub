@@ -346,6 +346,9 @@ async function applyLang() {
   updateLockUI();
   renderTranscript();
   refreshHostText();
+  // 兼容性检测弹窗跟随语言（compat.ts 注册）：弹窗遮罩挡住了本面板的 btnLang，
+  // 用户只能用弹窗内自己的语言按钮——那也是委托到这里切换的，切完由本钩子回填弹窗文案
+  (window as any).__easysubCompatRefresh?.(currentLang);
 }
 
 // 宿主文案定制的转发（定义在 applyLang 之后避免 TDZ；applyLang 里直接调用本函数）

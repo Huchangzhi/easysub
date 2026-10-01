@@ -142,63 +142,89 @@ async function runCompatCheck(): Promise<void> {
   showCompatModal(report);
 }
 
+// 最近一次检测结果 + 当前语言：语言切换时（面板 applyLang 回调 __easysubCompatRefresh）
+// 用它们原地重渲染弹窗文案。弹窗是"首次启动"场景，遮罩挡住了面板的 btnLang，
+// 所以弹窗内自带语言按钮（委托给面板的 btnLang 走同一套 setLang+applyLang）。
+let lastReport: CompatReport | null = null;
+let compatLang = 'zh_CN';
+
+function fillCompatModal(report: CompatReport, lang: string): void {
+  const modal = document.getElementById('compatModal');
+  if (!modal) return;
+  // 标题 + 评分（颜色随分数分档：绿/琥珀/红）
+  document.getElementById('compatTitle')!.textContent = tSync(lang, 'compatTitle');
+  const scoreEl = document.getElementById('compatScore')!;
+  scoreEl.textContent = `${report.score}/100`;
+  scoreEl.style.color = report.score >= 90 ? 'var(--green)'
+    : report.score >= 60 ? 'var(--orange)' : 'var(--red)';
+  // 语言切换按钮：文案显示"可切换到的另一种语言"（与面板 btnLang 同一约定）
+  const langBtn = document.getElementById('compatLang') as HTMLButtonElement | null;
+  if (langBtn) langBtn.textContent = tSync(lang, 'langSwitch');
+  // 结论行：检测到的浏览器 + 三档结论
+  const verdictKey = report.score >= 90 ? 'compatVerdictGood'
+    : report.score >= 60 ? 'compatVerdictMid' : 'compatVerdictBad';
+  document.getElementById('compatVerdict')!.textContent =
+    tSync(lang, 'compatDetected').replace('{name}', report.browser) + ' ' + tSync(lang, verdictKey);
+  // 检查明细：按 必须/重要/建议 分组；通过=✓（绿），重要/必须失败=✗（红），建议失败=!（琥珀）
+  const list = document.getElementById('compatList')!;
+  list.innerHTML = '';
+  let lastLevel: CheckLevel | null = null;
+  for (const c of report.checks) {
+    if (c.level !== lastLevel) {
+      const g = document.createElement('div');
+      g.className = 'compat-group';
+      g.textContent = tSync(lang, c.level === 'blocker' ? 'compatGroupBlocker'
+        : c.level === 'important' ? 'compatGroupImportant' : 'compatGroupAdvice');
+      list.appendChild(g);
+      lastLevel = c.level;
+    }
+    const row = document.createElement('div');
+    row.className = 'compat-row' + (c.ok ? ' ok' : (c.level === 'advice' ? ' warn' : ' fail'));
+    const ico = document.createElement('span');
+    ico.className = 'compat-ico ' + (c.ok ? 'pass' : (c.level === 'advice' ? 'warn' : 'fail'));
+    ico.textContent = c.ok ? '✓' : (c.level === 'advice' ? '!' : '✗');
+    const txt = document.createElement('span');
+    txt.textContent = tSync(lang, 'compatChk' + c.id);
+    row.append(ico, txt);
+    list.appendChild(row);
+  }
+  // 不达标才给下载推荐。Chrome 给中国站与国际站两个官方链接（google.cn 对部分
+  // 地区/网络不可达，google.com 同理——两个都摆出来让用户按自己网络挑能打开的）
+  const dl = document.getElementById('compatDl')!;
+  if (!report.uaOk || report.score < 90) {
+    (document.getElementById('compatDlChromeCn') as HTMLAnchorElement).href =
+      'https://www.google.cn/chrome/';
+    document.getElementById('compatDlChromeCn')!.textContent = tSync(lang, 'compatDlChromeCn');
+    (document.getElementById('compatDlChromeIntl') as HTMLAnchorElement).href =
+      'https://www.google.com/chrome/';
+    document.getElementById('compatDlChromeIntl')!.textContent = tSync(lang, 'compatDlChromeIntl');
+    (document.getElementById('compatDlEdge') as HTMLAnchorElement).href =
+      'https://www.microsoft.com/edge/download';
+    document.getElementById('compatDlEdge')!.textContent = tSync(lang, 'compatDlEdge');
+    document.getElementById('compatDlLabel')!.textContent = tSync(lang, 'compatNeedBrowser');
+    dl.hidden = false;
+  } else {
+    dl.hidden = true;
+  }
+  const ok = document.getElementById('compatOk')!;
+  ok.textContent = tSync(lang, 'compatOk');
+  ok.onclick = () => { modal.hidden = true; };
+}
+
 function showCompatModal(report: CompatReport): void {
   const modal = document.getElementById('compatModal');
   if (!modal) return; // 模板缺失（极端）：静默跳过，兼容性提示不能阻塞面板
+  lastReport = report;
   void getLang().then((lang) => {
-    // 标题 + 评分（颜色随分数分档：绿/琥珀/红）
-    document.getElementById('compatTitle')!.textContent = tSync(lang, 'compatTitle');
-    const scoreEl = document.getElementById('compatScore')!;
-    scoreEl.textContent = `${report.score}/100`;
-    scoreEl.style.color = report.score >= 90 ? 'var(--green)'
-      : report.score >= 60 ? 'var(--orange)' : 'var(--red)';
-    // 结论行：检测到的浏览器 + 三档结论
-    const verdictKey = report.score >= 90 ? 'compatVerdictGood'
-      : report.score >= 60 ? 'compatVerdictMid' : 'compatVerdictBad';
-    document.getElementById('compatVerdict')!.textContent =
-      tSync(lang, 'compatDetected').replace('{name}', report.browser) + ' ' + tSync(lang, verdictKey);
-    // 检查明细：按 必须/重要/建议 分组；通过=✓（绿），重要/必须失败=✗（红），建议失败=!（琥珀）
-    const list = document.getElementById('compatList')!;
-    list.innerHTML = '';
-    let lastLevel: CheckLevel | null = null;
-    for (const c of report.checks) {
-      if (c.level !== lastLevel) {
-        const g = document.createElement('div');
-        g.className = 'compat-group';
-        g.textContent = tSync(lang, c.level === 'blocker' ? 'compatGroupBlocker'
-          : c.level === 'important' ? 'compatGroupImportant' : 'compatGroupAdvice');
-        list.appendChild(g);
-        lastLevel = c.level;
-      }
-      const row = document.createElement('div');
-      row.className = 'compat-row' + (c.ok ? ' ok' : (c.level === 'advice' ? ' warn' : ' fail'));
-      const ico = document.createElement('span');
-      ico.className = 'compat-ico ' + (c.ok ? 'pass' : (c.level === 'advice' ? 'warn' : 'fail'));
-      ico.textContent = c.ok ? '✓' : (c.level === 'advice' ? '!' : '✗');
-      const txt = document.createElement('span');
-      txt.textContent = tSync(lang, 'compatChk' + c.id);
-      row.append(ico, txt);
-      list.appendChild(row);
+    compatLang = lang;
+    fillCompatModal(report, lang);
+    // 弹窗内语言切换 → 委托面板的 btnLang（它做 setLang + applyLang），
+    // applyLang 末尾的 __easysubCompatRefresh 钩子会把本弹窗文案原地刷新
+    const langBtn = document.getElementById('compatLang') as HTMLButtonElement | null;
+    if (langBtn && !compatLangBound) {
+      compatLangBound = true;
+      langBtn.onclick = () => document.getElementById('btnLang')?.click();
     }
-    // 不达标才给下载推荐；Chrome 官网按界面语言选 cn/国际站（google.cn 对非中文区不可用）
-    const dl = document.getElementById('compatDl')!;
-    if (!report.uaOk || report.score < 90) {
-      const chromeUrl = (navigator.language || '').toLowerCase().startsWith('zh')
-        ? 'https://www.google.cn/chrome/'
-        : 'https://www.google.com/chrome/';
-      (document.getElementById('compatDlChrome') as HTMLAnchorElement).href = chromeUrl;
-      document.getElementById('compatDlChrome')!.textContent = tSync(lang, 'compatDlChrome');
-      (document.getElementById('compatDlEdge') as HTMLAnchorElement).href =
-        'https://www.microsoft.com/edge/download';
-      document.getElementById('compatDlEdge')!.textContent = tSync(lang, 'compatDlEdge');
-      document.getElementById('compatDlLabel')!.textContent = tSync(lang, 'compatNeedBrowser');
-      dl.hidden = false;
-    } else {
-      dl.hidden = true;
-    }
-    const ok = document.getElementById('compatOk')!;
-    ok.textContent = tSync(lang, 'compatOk');
-    ok.onclick = () => { modal.hidden = true; };
     modal.onclick = (e) => { if (e.target === modal) modal.hidden = true; };
     if (!compatEscBound) {
       compatEscBound = true;
@@ -207,8 +233,17 @@ function showCompatModal(report: CompatReport): void {
       });
     }
     modal.hidden = false;
-    ok.focus();
+    (document.getElementById('compatOk') as HTMLButtonElement).focus();
   });
 }
 
+// 面板 applyLang 末尾回调：任何语言切换（弹窗内按钮 / 面板按钮 / 其它入口）都让
+// 打开中的检测弹窗原地换文案。弹窗没开或尚无检测结果时是空操作。
+(window as any).__easysubCompatRefresh = (lang: string) => {
+  compatLang = lang;
+  const modal = document.getElementById('compatModal');
+  if (modal && !modal.hidden && lastReport) fillCompatModal(lastReport, lang);
+};
+
 let compatEscBound = false;
+let compatLangBound = false;
