@@ -43,7 +43,6 @@ export class SubtitleShell {
   private fontSize = 34;
   private running = false;
   private pipWin: Window | null = null;
-  private autoPinned = false;
 
   // Document PiP 入口：按规范 [Exposed=Window] 只挂在 window 上
   // （document.documentPictureInPicture 恒为 undefined）；document 仅作兜底兼容。
@@ -129,26 +128,13 @@ export class SubtitleShell {
     };
     if (this.btnStop) this.btnStop.onclick = () => this.opts.onStop();
 
-    // 默认置顶：requestWindow 受浏览器安全约束必须用户手势触发、无法在加载时自动调用，
-    // 因此挂首次点击自动置顶——任意点击窗口即进画中画，无需去找图钉按钮。
-    // 工具条与叠层内按钮（锁定/回看）不触发自动置顶，避免调字号时误进画中画。
-    window.addEventListener('click', (e: Event) => this.tryAutoPin(e), true);
+    // 注：曾经的"首次点击窗口任意位置自动置顶"已按用户要求移除——任意点击就进画中画
+    // 属于意外触发重灾区（拖拽选字/误点都中招）。置顶只走工具条的图钉按钮（本身就在
+    // 用户手势内，满足 requestWindow 的手势要求）。
 
     // 用户直接关掉画中画窗口：浮窗是唯一显示端兼控制器，关闭即结束会话/停止显示
     window.addEventListener('pagehide', () => {
       this.opts.onTeardown?.();
-    });
-  }
-
-  private tryAutoPin(e: Event) {
-    if (this.pipWin || !this.dpi || this.autoPinned) return;
-    const t = e.target as Element | null;
-    if (t?.closest?.('.toolbar')) return;
-    if (t?.closest?.('button')) return;
-    this.autoPinned = true;
-    this.pinToPip().catch((err) => {
-      console.log('[EasySub] 自动置顶失败:', err);
-      this.autoPinned = false;
     });
   }
 
