@@ -249,7 +249,7 @@ jobs:
             - 解压后托管到任意静态站点（GitHub Pages / 对象存储 / 自建服务器）即可使用
             - 需要跨源隔离（zip 内自带 coi-serviceworker.js 自动处理，首次访问会刷新一次）
             - 识别模型约 412MB，首次使用时在页面里一键下载或导入一次（存浏览器 IndexedDB）；
-              也可直接访问在线部署：https://huchangzhi.github.io/easysub/
+              也可直接访问在线部署：https://easysub-preview.hcz1017.dpdns.org/
 
             ### 实时翻译模型（可选，离线，约 216MB）
             启用面板"实时翻译"需要下载此模型包：
