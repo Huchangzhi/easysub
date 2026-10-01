@@ -8,6 +8,7 @@
 
 [目前已上架微软插件市场](https://microsoftedge.microsoft.com/addons/detail/elphdofjlfpccfkcfaamkodcniemecao)
 
+[网页版-预览版](https://easysub-preview.hcz1017.dpdns.org/)
 
 ## 简介
 
