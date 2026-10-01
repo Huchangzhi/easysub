@@ -220,22 +220,13 @@ function fillCompatModal(report: CompatReport, lang: string): void {
     modal.hidden = true;
     storage.set({ [SEEN_KEY]: navigator.userAgent }).catch(() => {});
   };
-  // 「重新检测」：重跑一轮完整检测并原地刷新结果（弹窗保持打开，语言与滚动位置不动）
-  const recheck = document.getElementById('compatRecheck') as HTMLButtonElement | null;
-  if (recheck) {
-    recheck.textContent = tSync(lang, 'compatRecheck');
-    recheck.onclick = async () => {
-      recheck.disabled = true;
-      try {
-        lastReport = await detectCompat();
-        fillCompatModal(lastReport, compatLang);
-      } finally {
-        // fillCompatModal 重绑了 onclick 并重写文案，按钮引用仍在——恢复可用态
-        const btn = document.getElementById('compatRecheck') as HTMLButtonElement | null;
-        if (btn) btn.disabled = false;
-      }
-    };
-  }
+}
+
+// 手动重新打开检测弹窗（面板 Hero 顶栏的盾牌按钮）：每次都重跑一轮完整检测
+// （与首次检测同一条 detectCompat() 路径，口径一致），且**不受**「已读」记忆限制——
+// 用户主动点开就给他看最新结果。
+export async function openCompatCheck(): Promise<void> {
+  showCompatModal(await detectCompat());
 }
 
 function showCompatModal(report: CompatReport): void {

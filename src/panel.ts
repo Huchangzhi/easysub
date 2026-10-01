@@ -15,7 +15,7 @@ import {
 } from './platform';
 import { listModelKeys, saveModelFilesAtomic, saveModelBlob, getModelFile } from './model-db';
 import { TRANSCRIPT_MAX, clearTranscript } from './transcript-store';
-import { initCompatCheck } from './compat';
+import { initCompatCheck, openCompatCheck } from './compat';
 
 const $ = (id: string) => document.getElementById(id)!;
 // 可选元素（Web 版外壳独有）：扩展 popup 模板里没有这些 id，取值一律走这里，
@@ -343,6 +343,9 @@ async function applyLang() {
     : tSync(currentLang,
       lastStatus === 'Running' ? 'stateRunning' : (hasStarted ? 'stateStopped' : 'stateReady'));
   btnLang.textContent = tr('langSwitch');
+  // 兼容性检测按钮是纯图标：名称走 aria-label + title 随语言刷新
+  $('btnCompat').setAttribute('aria-label', tr('compatTitle'));
+  $('btnCompat').title = tr('compatTitle');
   updateLockUI();
   renderTranscript();
   refreshHostText();
@@ -1177,6 +1180,10 @@ async function doStart(): Promise<void> {
 
 export function triggerStart(): void { void doStart(); }
 btnStart.onclick = () => { void doStart(); };
+
+// 兼容性检测·手动入口（Hero 顶栏盾牌按钮）：随时重开检测弹窗，不受"已读"记忆限制。
+// 每次点击都重跑一轮完整检测，给用户当前环境的最新结果。
+$('btnCompat').onclick = () => { void openCompatCheck(); };
 
 btnStop.onclick = () => {
   sendToHost({ type: 'STOP_RECOGNITION' }).catch(() => {});
