@@ -495,5 +495,29 @@
     </div>
   </div>
 
+  <!-- 浏览器兼容性自检（首次启动弹一次，两端共用）：UA 必须 Chrome/Edge，关键 API 与
+       静态资源响应头按「必须 / 重要 / 建议」三档检测并汇总为 0-100 评分；不达标时给出
+       Chrome / Edge 官方下载链接（Chrome 按界面语言选 google.cn / google.com）。
+       检测与渲染逻辑全部在 src/compat.ts，这里只有静态骨架。 -->
+  <div class="unsup-mask" id="compatModal" hidden>
+    <div class="unsup-card compat" role="dialog" aria-modal="true" aria-labelledby="compatTitle">
+      <div class="unsup-head">
+        <svg class="unsup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+        <span id="compatTitle"></span>
+        <span class="compat-score" id="compatScore"></span>
+      </div>
+      <p class="unsup-body" id="compatVerdict"></p>
+      <div class="compat-list" id="compatList"></div>
+      <div class="compat-dl" id="compatDl" hidden>
+        <span id="compatDlLabel"></span>
+        <a id="compatDlChrome" target="_blank" rel="noopener"></a>
+        <a id="compatDlEdge" target="_blank" rel="noopener"></a>
+      </div>
+      <div class="unsup-actions">
+        <button type="button" class="unsup-btn primary" id="compatOk"></button>
+      </div>
+    </div>
+  </div>
+
   <div class="disclaimer" id="disclaimer">字幕由模型识别，不保证准确</div>
 </div>

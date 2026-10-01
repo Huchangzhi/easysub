@@ -717,6 +717,23 @@ body[data-mode="light"] .unsup-card { box-shadow: 0 14px 36px rgba(0, 0, 0, 0.2)
   padding: 3px 6px; font: 500 11px/1.4 inherit; margin-left: auto;
 }
 
+/* —— 浏览器兼容性自检（首次启动弹一次，两端共用；检测逻辑在 src/compat.ts）——
+   卡片复用 .unsup-mask/.unsup-card 体系，这里只补检测明细列表与下载推荐行的样式 */
+.unsup-card.compat { max-width: 440px; }
+/* 评分贴标题行右侧：等宽字重数据感，颜色由 JS 按分数分档（绿/琥珀/红） */
+.compat-score { margin-left: auto; font: 600 13px/1 ui-monospace, Consolas, 'Courier New', monospace; }
+.compat-list { display: flex; flex-direction: column; gap: 4px; }
+.compat-group { font-size: 10px; font-weight: 600; color: var(--text2); margin-top: 4px; }
+.compat-row { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text2); }
+.compat-row.fail, .compat-row.warn { color: var(--text); }
+.compat-ico { width: 13px; height: 13px; flex: none; font-weight: 600; text-align: center; line-height: 13px; }
+.compat-ico.pass { color: var(--green); }
+.compat-ico.fail { color: var(--red); }
+.compat-ico.warn { color: var(--orange); }
+.compat-dl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--text2); }
+.compat-dl a { color: var(--accent); text-decoration: none; font-weight: 500; }
+.compat-dl a:hover { text-decoration: underline; }
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   /* 坑：层级最高——t28 动效开关（body.anim）只是用户偏好，系统"减弱动态"永远优先：

@@ -15,6 +15,7 @@ import {
 } from './platform';
 import { listModelKeys, saveModelFilesAtomic, saveModelBlob, getModelFile } from './model-db';
 import { TRANSCRIPT_MAX, clearTranscript } from './transcript-store';
+import { initCompatCheck } from './compat';
 
 const $ = (id: string) => document.getElementById(id)!;
 // 可选元素（Web 版外壳独有）：扩展 popup 模板里没有这些 id，取值一律走这里，
@@ -85,6 +86,8 @@ export function mountPanel(h: PanelHostHooks = {}) {
   // 宿主定制可能改了选项/文案，提示与语言表都要跟着重算一次
   updateSourceHint();
   refreshHostText();
+  // 浏览器兼容性自检（两端共用）：内部按 UA 记忆，同一浏览器只在首次启动弹一次
+  void initCompatCheck();
 }
 
 const statusDot = $('statusDot');
