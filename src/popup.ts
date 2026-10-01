@@ -75,7 +75,7 @@ const translateNotice = $('translateNotice');
 const translateStatus = $('translateStatus');
 const translateDirRow = $('translateDirRow');
 const translateTimingRow = $('translateTimingRow');
-const TRANSLATE_RELEASES_URL = 'https://github.com/huchangzhi/easysub/releases';
+const TRANSLATE_RELEASES_URL = 'https://github.com/easysub-org/easysub/releases';
 // —— ASR 模型缺失引导（nomodel 版安装包）——
 const ASR_DATA_PATH = 'wasm/sherpa-onnx-wasm-main-asr.data';
 const ASR_DB_KEY = '__asr_wasm_data';

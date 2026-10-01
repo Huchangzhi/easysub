@@ -175,7 +175,7 @@ function onTranslationResult(job: { kind: 'final' | 'stream'; seq: number; text:
     log(`[译] 交付 seq=${job.seq}/${job.kind} → "${String(text).slice(0, 30)}"`);
   } else if (m.reason === 'no-model' && !translateWarned) {
     translateWarned = true;
-    log('翻译不可用：未检测到翻译模型。请在扩展面板"实时翻译"中点击"选择模型"安装官方模型包（github.com/huchangzhi/easysub/releases）');
+    log('翻译不可用：未检测到翻译模型。请在扩展面板"实时翻译"中点击"选择模型"安装官方模型包（github.com/easysub-org/easysub/releases）');
   } else if (m.error && !translateWarned) {
     translateWarned = true;
     log('翻译出错: ' + m.error);

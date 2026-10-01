@@ -8,10 +8,10 @@ $model = "zipformer-bilingual-zh-en-2023-02-20"
 $base = "sherpa-onnx-wasm-simd-v${Version}-${model}"
 
 if ($Lite) {
-  $url = "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/${BuilderTag}/${base}-lite.tar.bz2"
+  $url = "https://github.com/easysub-org/easysub-wasm-builder/releases/download/${BuilderTag}/${base}-lite.tar.bz2"
   Write-Host "下载 WASM lite v${Version} (${BuilderTag})..." -ForegroundColor Yellow
 } else {
-  $url = "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/${BuilderTag}/${base}.tar.bz2"
+  $url = "https://github.com/easysub-org/easysub-wasm-builder/releases/download/${BuilderTag}/${base}.tar.bz2"
   Write-Host "下载 WASM full v${Version} (${BuilderTag})..." -ForegroundColor Yellow
 }
 
