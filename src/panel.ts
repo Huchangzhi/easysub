@@ -380,8 +380,9 @@ async function loadPrefs() {
   // 背景风格四选一（白名单校验回退 obsidian）
   const bs = BG_SCHEMES.includes(prefs.bgScheme) ? prefs.bgScheme : 'obsidian';
   applyBgScheme(bs);
-  // 深浅模式（t29，默认 dark；浅色为独立调色非反色，白名单回退 dark）
-  const cm = COLOR_MODES.includes(prefs.colorMode) ? prefs.colorMode : 'dark';
+  // 深浅模式（默认 auto=跟随系统；浅色为独立调色非反色，白名单回退 auto。
+  // 老用户存过 'dark'/'light' 的保持原样，不受默认值变更影响）
+  const cm = COLOR_MODES.includes(prefs.colorMode) ? prefs.colorMode : 'auto';
   applyColorMode(cm);
   // 动效开关默认关（=== true 才开，与"用户要求默认关闭"对齐）；恢复即挂/摘 .anim
   chkAnim.checked = prefs.animationsEnabled === true;
@@ -517,21 +518,36 @@ chkAnim.onchange = () => {
   applyAnim();
 };
 
-// —— 深浅模式（t29）：'dark' 默认 | 'light'，body[data-mode] 整组变量覆盖 ——
-// 纯 popup 视觉不进 FORWARD/PREFS_PATCH 链路（同 bgScheme）
-const COLOR_MODES = ['dark', 'light'];
+// —— 深浅模式（t29+）：'auto'（默认，跟随系统 prefers-color-scheme）| 'dark' | 'light' ——
+// 纯 popup 视觉不进 FORWARD/PREFS_PATCH 链路（同 bgScheme）。
+// auto 的实现：body[data-mode] 始终写**解析后的实际值**（dark/light），CSS 无需感知 auto；
+// 系统深浅切换时 matchMedia 的 change 事件再解析一次。prefs.colorMode 存的是用户选择
+// （auto/dark/light），弹窗高亮也按用户选择走，实际生效模式由这里解析。
+const COLOR_MODES = ['auto', 'dark', 'light'];
+const darkSchemeMQ = window.matchMedia('(prefers-color-scheme: dark)');
+let colorModePref = 'auto';
 
 function applyColorMode(mode: string) {
-  document.body.dataset.mode = mode;
+  colorModePref = mode;
+  const eff = mode === 'auto' ? (darkSchemeMQ.matches ? 'dark' : 'light') : mode;
+  document.body.dataset.mode = eff;
   document.querySelectorAll<HTMLButtonElement>('.cmode').forEach(b => {
     const on = b.dataset.cmode === mode;
     b.classList.toggle('active', on);
     b.setAttribute('aria-checked', String(on));
   });
   // 波形静柱色随深浅模式二态刷新（canvas 无 CSS 继承，只能 JS 给色）
-  waveDimCache = mode === 'light' ? 'rgba(0, 0, 0, 0.20)' : 'rgba(255, 255, 255, 0.22)';
+  waveDimCache = eff === 'light' ? 'rgba(0, 0, 0, 0.20)' : 'rgba(255, 255, 255, 0.22)';
+  // 波形当前柱的 accent 缓存跟着实际模式刷（浅色主题是加深变体，与深色不同值）；
+  // loadPrefs 里 applyTheme 先于 applyColorMode 执行，不刷的话 auto→浅色时波形仍是深色 accent
+  accentCache = getComputedStyle(document.body).getPropertyValue('--accent').trim() || accentCache;
   updateBgSchemeNames();
 }
+
+// 跟随系统：仅当用户选了 auto 才响应系统深浅切换（手动模式下系统变化不影响面板）
+darkSchemeMQ.addEventListener('change', () => {
+  if (colorModePref === 'auto') applyColorMode('auto');
+});
 
 // —— 背景方案名随深浅模式联动（t31）：dark=曜石黑/纯黑/石墨蓝灰/暖碳，light=暖灰白/纯白/冷灰蓝/米暖 ——
 // 坑：两个维度都要覆盖——语言切换（applyLang）用当前模式的文案，模式切换（applyColorMode）

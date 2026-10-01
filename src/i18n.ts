@@ -115,9 +115,10 @@ const strings: Record<string, Record<string, string>> = {
     helpAnimations: '开启后恢复状态灯呼吸与面板入场交错动画。默认关闭；开销可忽略。注意：系统开启"减弱动态效果"时本开关不生效。',
     // —— t29 深浅模式 ——
     colorModeLabel: '深浅模式',
+    modeAuto: '自动',
     modeDark: '深色',
     modeLight: '浅色',
-    helpColorMode: '切换面板深浅外观。浅色为独立调色（非反色）：白卡片、加深强调色，对比度已校准。选择自动保存。',
+    helpColorMode: '切换面板深浅外观：自动（默认）跟随系统的深浅模式实时切换，也可手动固定深色或浅色。浅色为独立调色（非反色）：白卡片、加深强调色，对比度已校准。选择自动保存。',
     // —— 实时翻译（离线自带模型）——
     secTranslate: '实时翻译',
     showTranslate: '启用翻译',
@@ -325,9 +326,10 @@ const strings: Record<string, Record<string, string>> = {
     showAnimations: 'Animations',
     helpAnimations: 'Restores the breathing status dot and the staggered panel entrance. Off by default; the cost is negligible. Note: this switch has no effect while your system "reduce motion" setting is on.',
     colorModeLabel: 'Appearance Mode',
+    modeAuto: 'Auto',
     modeDark: 'Dark',
     modeLight: 'Light',
-    helpColorMode: 'Switch the panel between dark and light. Light is an independent palette (not an inversion): white cards, darkened accents, contrast pre-calibrated. Saved automatically.',
+    helpColorMode: 'Switch the panel between Auto, Dark and Light. Auto (default) follows the system color scheme in real time; Light is an independent palette (not an inversion): white cards, darkened accents, contrast pre-calibrated. Saved automatically.',
     secTranslate: 'Real-time Translation',
     showTranslate: 'Enable Translation',
     experimentalBadge: 'Experimental',
