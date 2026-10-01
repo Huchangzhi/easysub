@@ -30,7 +30,7 @@ jobs:
         run: |
           TMPDIR=$(mktemp -d)
           curl -sL \
-            "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
+            "https://github.com/easysub-org/easysub-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
             | tar xj -C "$TMPDIR"
           mkdir -p public/wasm
           find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
@@ -79,7 +79,7 @@ jobs:
         run: |
           TMPDIR=$(mktemp -d)
           curl -sL \
-            "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
+            "https://github.com/easysub-org/easysub-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20.tar.bz2" \
             | tar xj -C "$TMPDIR"
           mkdir -p public/wasm
           find "$TMPDIR" -type f -exec mv {} public/wasm/ \;
@@ -131,7 +131,7 @@ jobs:
         run: |
           TMPDIR=$(mktemp -d)
           curl -sL \
-            "https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20-lite.tar.bz2" \
+            "https://github.com/easysub-org/easysub-wasm-builder/releases/download/build-20260723-1231/sherpa-onnx-wasm-simd-v1.13.4-zipformer-bilingual-zh-en-2023-02-20-lite.tar.bz2" \
             | tar xj -C "$TMPDIR"
           mkdir -p public/wasm
           find "$TMPDIR" -type f -exec mv {} public/wasm/ \;

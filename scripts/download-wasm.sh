@@ -19,10 +19,10 @@ done
 
 BASE="sherpa-onnx-wasm-simd-v${VERSION}-${MODEL}"
 if [ "$LITE" = true ]; then
-  URL="https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/${BUILDER_TAG}/${BASE}-lite.tar.bz2"
+  URL="https://github.com/easysub-org/easysub-wasm-builder/releases/download/${BUILDER_TAG}/${BASE}-lite.tar.bz2"
   echo "Downloading sherpa-onnx WASM lite v${VERSION} (${BUILDER_TAG})..."
 else
-  URL="https://github.com/Huchangzhi/TMSpeech-wasm-builder/releases/download/${BUILDER_TAG}/${BASE}.tar.bz2"
+  URL="https://github.com/easysub-org/easysub-wasm-builder/releases/download/${BUILDER_TAG}/${BASE}.tar.bz2"
   echo "Downloading sherpa-onnx WASM full v${VERSION} (${BUILDER_TAG})..."
 fi
 

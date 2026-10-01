@@ -560,7 +560,7 @@ export class AsrEngine {
     } else if (m.reason === 'no-model' && !this.translateWarned) {
       this.translateWarned = true;
       // 保留发布页地址：用户没有其它自助恢复途径，日志是唯一告知渠道（扩展侧原文如此）
-      this.log('翻译不可用：未检测到翻译模型。请在面板"实时翻译"中点击"选择模型"安装官方模型包（github.com/huchangzhi/easysub/releases）');
+      this.log('翻译不可用：未检测到翻译模型。请在面板"实时翻译"中点击"选择模型"安装官方模型包（github.com/easysub-org/easysub/releases）');
     } else if (m.error && !this.translateWarned) {
       this.translateWarned = true;
       this.log('翻译出错: ' + m.error);
