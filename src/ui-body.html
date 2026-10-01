@@ -383,6 +383,11 @@
 
   <div class="status-bar" id="modelStatus"></div>
 
+  <!-- 子面板遮罩（仅 Web 整页显示，panel.ts 按 IS_EXTENSION 门控）：热词等 .subpanel 在整页里
+       是居中小卡，垫一层灰底压暗页面其余内容、突出焦点。扩展弹窗里 .subpanel 本就 inset:0
+       铺满整窗、遮罩会被完全盖住，因此扩展侧不显示（节点存在但恒 hidden）。 -->
+  <div class="subpanel-backdrop" id="subpanelBackdrop" hidden></div>
+
   <!-- 热词编辑·窗中窗（子面板浮层）：absolute 盖在弹出窗上，随 .container 定位 -->
   <div class="subpanel" id="hotwordsPanel" hidden>
     <div class="subpanel-head">

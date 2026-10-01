@@ -598,6 +598,17 @@ input[type="range"]:active::-webkit-slider-thumb { transform: scale(1.2); }
 }
 body[data-mode="light"] .subpanel { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18); }
 .subpanel[hidden] { display: none; }
+/* —— 子面板遮罩（仅 Web 整页显示，panel.ts 按 IS_EXTENSION 门控显隐）——
+   Web 里 .subpanel 是居中小卡，没有遮罩的话页面其余内容原样亮着，焦点感全无；
+   扩展弹窗里 .subpanel inset:0 铺满整窗，遮罩永远被完全盖住，节点存在但恒 hidden。
+   z-index 压在 .subpanel(30) 之下，卡与遮罩的层级关系不因新增遮罩改变 */
+.subpanel-backdrop {
+  position: fixed; inset: 0; z-index: 29;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+}
+.subpanel-backdrop[hidden] { display: none; }
+body[data-mode="light"] .subpanel-backdrop { background: rgba(15, 18, 24, 0.42); }
 .subpanel-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .subpanel-hint { font-size: 11px; color: var(--text2); line-height: 1.5; }
 .subpanel textarea {
@@ -666,6 +677,11 @@ body[data-mode="light"] .asr-backdrop { background: rgba(15, 18, 24, 0.5); }
 body[data-mode="light"] .unsup-mask { background: rgba(15, 18, 24, 0.42); }
 .unsup-card {
   width: 100%; max-width: 320px;
+  /* 坑：短视口（小窗口/横屏手机）下长文案卡片（英文名确认框/兼容性检测）会比视口还高，
+     flex 居中会把上下两端一起顶出屏幕且遮罩不滚动——必须把卡片自身约束在视口内滚动 */
+  max-height: calc(100vh - 28px);
+  max-height: calc(100dvh - 28px); /* 支持 dvh 的浏览器用动态视口（移动端地址栏收放） */
+  overflow-y: auto;
   display: flex; flex-direction: column; gap: 8px;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 12px; padding: 13px;

@@ -712,6 +712,7 @@ function saveHotwords() {
 }
 
 function openHotwords() {
+  setSubpanelBackdrop(true);
   storage.get(HOTWORDS_KEY).then(r => {
     const arr = Array.isArray(r[HOTWORDS_KEY]) ? r[HOTWORDS_KEY].filter((s: unknown) => typeof s === 'string') : [];
     hotwordsInput.value = arr.join('\n');
@@ -724,6 +725,15 @@ function openHotwords() {
 function closeHotwords() {
   saveHotwords(); // 关闭即保存：编辑内容不丢
   hotwordsPanel.hidden = true;
+  setSubpanelBackdrop(false);
+}
+
+// —— 子面板遮罩（#subpanelBackdrop，仅 Web 整页显示）——
+// Web 里热词等 .subpanel 是居中小卡，页面其余内容原样亮着没有焦点感，垫一层灰底压暗；
+// 扩展弹窗里 .subpanel inset:0 铺满整窗、遮罩会被完全盖住，因此扩展侧恒不显示（零视觉变化）。
+const subpanelBackdrop = $opt('subpanelBackdrop') as HTMLDivElement | null;
+function setSubpanelBackdrop(visible: boolean) {
+  if (subpanelBackdrop) subpanelBackdrop.hidden = !(visible && !IS_EXTENSION);
 }
 
 btnOpenHotwords.onclick = openHotwords;
