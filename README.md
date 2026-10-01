@@ -143,4 +143,4 @@ MIT License © 2026 hcz1017
 
 ## Star 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Huchangzhi/easysub&type=Date)](https://star-history.com/#Huchangzhi/easysub&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=easysub-org/easysub&type=Date)](https://star-history.com/#easysub-org/easysub&Date)
